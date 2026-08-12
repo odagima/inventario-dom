@@ -1,0 +1,381 @@
+:root {
+  /* Paleta Grupo DOM (ver DECISOES-TRAVADAS.md §14) — cores de marca, fixas. */
+  --dom-musgo: #5c6e49;
+  --dom-offwhite: #f4f1e9;
+  --dom-marinho: #1c2b44;
+  --dom-laranja: #c15a1b;
+  --dom-preto: #1a1a1a;
+  --dom-cinza: #8c887e;
+
+  /* Base do tema — compartilhada entre Admin/Cadastro e Contagem. Só o acento (laranja no
+     admin, musgo na contagem) e o cabeçalho da contagem são diferentes — ver overrides abaixo
+     em .admin-shell-wrapper/.shell e em .screen .topbar/.screen .app-header. */
+  --bg: var(--dom-offwhite);
+  --surface: #ffffff;
+  --surface-2: #ece7d9;
+  --surface-3: #e2dcc9;
+  --border: rgba(28, 43, 68, 0.12);
+  --border-strong: rgba(28, 43, 68, 0.24);
+  --text: var(--dom-marinho);
+  --text-secondary: #6e6a5c;
+  --text-tertiary: #ada79a;
+  --muted: var(--text-secondary);
+  --success: #3f7d4a;
+  --warning: #c9791e;
+  --danger: #b3402a;
+  /* 12/08/2026 — Matriz BCG do cardápio (Curva de Vendas): "Estrela" e "Cavalo de batalha" reusam
+     --success/--warning acima; "Enigma" e "Abacaxi" precisam de 2 tons novos porque nenhum token
+     existente sobra sem repetir hue (--danger fica perto demais de --warning nos 2 juntos — testado
+     no validador de paleta do skill dataviz, ΔE 14.2, abaixo do piso de 15 pra visão normal). Os 2
+     valores abaixo foram escolhidos e VALIDADOS junto com --success/--warning como conjunto de 4
+     cores categóricas (script `validate_palette.js` do skill dataviz, modo claro): banda de
+     luminosidade, piso de croma, separação CVD (daltonismo) e piso de visão normal, todos PASS.
+     Specíficos da matriz BCG — não são tokens de status genéricos como os 3 de cima. */
+  --bcg-enigma: #3a6ea5;
+  --bcg-abacaxi: #9c2f52;
+
+  /* Acento padrão = identidade da Contagem (musgo). Admin/Cadastro trocam pra laranja abaixo. */
+  --accent: var(--dom-musgo);
+  --accent-2: #46543a;
+  --accent-soft: rgba(92, 110, 73, 0.16);
+  --accent-soft-text: #45542f;
+
+  /* Cabeçalho arredondado da Contagem (só usado dentro de .screen — ver seletores abaixo). */
+  --header-bg: var(--dom-marinho);
+  --header-text: var(--dom-offwhite);
+  --header-text-secondary: #aebbce;
+
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Admin (painel) e Cadastro (vincular por câmera etc.) — mesma base clara, acento laranja. */
+.admin-shell-wrapper,
+.shell {
+  --accent: var(--dom-laranja);
+  --accent-2: #9c4715;
+  --accent-soft: rgba(193, 90, 27, 0.14);
+  --accent-soft-text: #8a3f13;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+button {
+  font: inherit;
+  font-weight: 500;
+  border-radius: 12px;
+  border: 0.5px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 12px 16px;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+button:active { opacity: 0.7; transform: scale(0.98); }
+
+button.primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  color: #fff;
+}
+
+button.ghost {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  padding: 6px 4px;
+}
+
+input, select {
+  font: inherit;
+  background: var(--surface-2);
+  border: 0.5px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 12px 14px;
+  width: 100%;
+  line-height: 1.3;
+}
+
+input::placeholder { color: var(--text-tertiary); }
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='11' height='7' viewBox='0 0 11 7'><path d='M1 1l4.5 4.5L10 1' stroke='%236e6a5c' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+}
+
+input:focus, select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+  border-color: transparent;
+}
+
+select option {
+  background: #ffffff;
+  color: var(--text);
+}
+
+.screen {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.app-header {
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+
+.app-header .brand {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.app-header .subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 2px 0 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+}
+
+.topbar .unidade {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Identidade própria da Contagem (ver DECISOES-TRAVADAS.md §14): cabeçalho marinho
+   arredondado — só dentro de .screen, nunca no Admin/Cadastro (que usam .app-header simples,
+   sem essa faixa colorida). */
+.screen .app-header,
+.screen .topbar {
+  background: var(--header-bg);
+  color: var(--header-text);
+  border-radius: 20px;
+  padding: 16px 18px;
+  margin: 0 0 16px;
+}
+.screen .app-header .subtitle,
+.screen .topbar .muted {
+  color: var(--header-text-secondary);
+}
+
+.card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 1px 3px rgba(28, 43, 68, 0.06);
+}
+
+.muted { color: var(--text-secondary); font-size: 13px; }
+
+.list-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 13px 4px;
+  border-bottom: 0.5px solid var(--border);
+  font-size: 15px;
+  border-radius: 8px;
+  transition: background 0.12s ease;
+}
+
+.list-item:hover { background: rgba(28, 43, 68, 0.035); }
+
+.list-item:last-child { border-bottom: none; }
+
+.spinner {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: girar-spinner 0.7s linear infinite;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes girar-spinner { to { transform: rotate(360deg); } }
+
+.carregando-linha { display: flex; align-items: center; padding: 24px 4px; }
+
+@media (max-width: 720px) {
+  .shell { padding: 18px 16px; }
+  .tabs button { font-size: 12px; padding: 7px; min-width: 64px; }
+  .card { padding: 14px; border-radius: 14px; }
+}
+
+/* 09/08/2026 — cards de KPI (Painel: Faturamento/Compras/CMV/etc.) e qualquer valor em R$
+   que fica dentro de um card estreito. Sem isso, um valor grande (ex. "R$ 2.281.924,88")
+   podia quebrar linha bem no meio ("R$" numa linha, o número na outra) quando o card
+   encolhia — feio e desalinhado. `container-type` deixa o tamanho da fonte reagir à
+   LARGURA REAL do card (não do viewport), então funciona igual em qualquer grid/coluna. */
+.metrica-card { container-type: inline-size; }
+.metrica-principal {
+  margin: 6px 0 14px;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+@container (max-width: 260px) {
+  .metrica-principal { font-size: 21px; }
+}
+@container (max-width: 200px) {
+  .metrica-principal { font-size: 18px; }
+}
+
+.sidebar-overlay {
+  position: fixed; inset: 0; background: rgba(28, 43, 68, 0.35);
+  z-index: 40; backdrop-filter: blur(2px);
+}
+
+.admin-shell-wrapper {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.admin-com-sidebar {
+  padding: 20px 16px 40px;
+}
+
+.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 280px; max-width: 85vw;
+  background: var(--surface); border-right: 0.5px solid var(--border);
+  z-index: 41; padding: 20px 16px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 20px;
+  transform: translateX(-100%); transition: transform 0.22s ease;
+}
+.sidebar.aberta { transform: translateX(0); }
+
+.sidebar-nav-grupo { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: 10px; background: transparent; border: none; color: var(--text);
+  font-size: 14px; text-align: left; width: 100%;
+}
+.sidebar-nav-item.active { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 600; }
+.sidebar-nav-item:hover { background: rgba(28, 43, 68, 0.05); }
+
+.admin-topbar {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+}
+.btn-menu {
+  width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  padding: 0; background: var(--surface-2); border: 0.5px solid var(--border); flex-shrink: 0;
+}
+
+@media (min-width: 900px) {
+  .sidebar { transform: translateX(0); box-shadow: none; }
+  .sidebar-overlay { display: none; }
+  .admin-topbar { display: none; }
+  .admin-shell-wrapper { max-width: none; margin: 0; padding: 0; }
+  .admin-com-sidebar { margin-left: 280px; padding: 28px 40px; }
+  .admin-com-sidebar-inner { max-width: 1000px; margin: 0 auto; }
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  padding: 2px;
+}
+
+.segmented button {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 8px;
+  font-size: 14px;
+  border-radius: 8px;
+}
+
+.segmented button.active {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-weight: 600;
+}
+
+.shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 28px 32px;
+  background: var(--bg);
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  padding: 2px;
+  margin: 20px 0;
+}
+.tabs button { flex: 1; min-width: 80px; background: transparent; border: none; font-size: 13px; padding: 8px; border-radius: 8px; }
+.tabs button.active { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 600; }
+
+.badge { font-size: 11px; padding: 4px 9px; border-radius: 7px; white-space: nowrap; font-weight: 500; }
+.badge-industrializado { background: var(--accent-soft); color: var(--accent-soft-text); }
+.badge-interno { background: rgba(63, 125, 74, 0.16); color: var(--success); }
+.badge-sem_codigo { background: rgba(201, 121, 30, 0.16); color: var(--warning); }
+
+.linha-scanner {
+  position: absolute;
+  left: 4%; right: 4%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: varrer-scanner 1.6s ease-in-out infinite;
+}
+
+@keyframes varrer-scanner {
+  0% { top: 6%; }
+  50% { top: 90%; }
+  100% { top: 6%; }
+}
+
+.ponto-pulso {
+  animation: pulso-ponto 1s ease-in-out infinite;
+}
+
+@keyframes pulso-ponto {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+@keyframes aparecer-check {
+  from { opacity: 0; transform: scale(0.5); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media print {
+  body * { visibility: hidden; }
+  #etiqueta-print, #etiqueta-print * { visibility: visible; }
+  #etiqueta-print { position: absolute; top: 0; left: 0; }
+}
