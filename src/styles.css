@@ -1,10 +1,14 @@
 :root {
-  /* Paleta Grupo DOM (ver DECISOES-TRAVADAS.md §14) — cores de marca, fixas. */
+  /* Paleta Grupo DOM (ver DECISOES-TRAVADAS.md §14) — cores de marca, fixas. Identidade mantida
+     (musgo/marinho/laranja); 09/09/2026, pedido do Felipe: versão "refinada" — fundo mais suave,
+     bordas mais quentes (menos azul frio competindo com o resto), cantos mais generosos em toda
+     a UI. Ver `--accent-cool` abaixo pro "traço frio" combinado com o K (só usado em detalhe de
+     gráfico, nunca em botão/badge/bloco grande — mantém o laranja como único protagonista). */
   --dom-musgo: #5c6e49;
-  --dom-offwhite: #f4f1e9;
+  --dom-offwhite: #f7f4ec;
   --dom-marinho: #1c2b44;
   --dom-laranja: #c15a1b;
-  --dom-preto: #1a1a1a;
+  --dom-preto: #221f1b;
   --dom-cinza: #8c887e;
 
   /* Base do tema — compartilhada entre Admin/Cadastro e Contagem. Só o acento (laranja no
@@ -12,17 +16,21 @@
      em .admin-shell-wrapper/.shell e em .screen .topbar/.screen .app-header. */
   --bg: var(--dom-offwhite);
   --surface: #ffffff;
-  --surface-2: #ece7d9;
-  --surface-3: #e2dcc9;
-  --border: rgba(28, 43, 68, 0.12);
-  --border-strong: rgba(28, 43, 68, 0.24);
+  --surface-2: #efeadb;
+  --surface-3: #e4ddcb;
+  --border: rgba(139, 111, 78, 0.22);
+  --border-strong: rgba(139, 111, 78, 0.38);
   --text: var(--dom-marinho);
-  --text-secondary: #6e6a5c;
-  --text-tertiary: #ada79a;
+  --text-secondary: #6b6559;
+  --text-tertiary: #a39d8e;
   --muted: var(--text-secondary);
   --success: #3f7d4a;
   --warning: #c9791e;
-  --danger: #b3402a;
+  --danger: #a8443a;
+  /* "Traço frio" (09/09/2026) — reservado SÓ pra linha de tendência em gráfico (ex.: média móvel
+     de faturamento), como detalhe "um pouco futurista" sem abandonar a paleta. Nunca usar em
+     badge, botão ou preenchimento grande — aí o laranja continua sendo o único protagonista. */
+  --accent-cool: #4e7a82;
   /* 12/08/2026 — Matriz BCG do cardápio (Curva de Vendas): "Estrela" e "Cavalo de batalha" reusam
      --success/--warning acima; "Enigma" e "Abacaxi" precisam de 2 tons novos porque nenhum token
      existente sobra sem repetir hue (--danger fica perto demais de --warning nos 2 juntos — testado
@@ -45,7 +53,14 @@
   --header-text: var(--dom-offwhite);
   --header-text-secondary: #aebbce;
 
-  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* 09/09/2026, pedido do Felipe ("utilize a fonte da Apple"): SF Pro não é distribuída pra uso
+     web (a Apple não libera arquivo de fonte pra terceiros embutirem) — o caminho certo, usado por
+     GitHub/Stripe/etc., é referenciar a fonte do SISTEMA. `-apple-system`/`BlinkMacSystemFont`
+     resolvem pra San Francisco sozinhos no Mac/iPhone; Windows cai pro Segoe UI, Android pro
+     Roboto — cada pessoa vê a fonte nativa do próprio aparelho, sem baixar nada. Tirou o `DM Sans`
+     do Google Fonts (removido também o <link> em index.html) — ganho de performance real pro time
+     contando estoque no celular com wifi ruim, não só estético. */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -71,7 +86,7 @@ html, body, #root {
 button {
   font: inherit;
   font-weight: 500;
-  border-radius: 12px;
+  border-radius: 16px;
   border: 0.5px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
@@ -98,7 +113,7 @@ input, select {
   font: inherit;
   background: var(--surface-2);
   border: 0.5px solid var(--border);
-  border-radius: 12px;
+  border-radius: 16px;
   color: var(--text);
   padding: 12px 14px;
   width: 100%;
@@ -175,7 +190,7 @@ select option {
 .screen .topbar {
   background: var(--header-bg);
   color: var(--header-text);
-  border-radius: 20px;
+  border-radius: 24px;
   padding: 16px 18px;
   margin: 0 0 16px;
 }
@@ -187,7 +202,7 @@ select option {
 .card {
   background: var(--surface);
   border: 0.5px solid var(--border);
-  border-radius: 16px;
+  border-radius: 20px;
   padding: 18px;
   box-shadow: 0 1px 3px rgba(28, 43, 68, 0.06);
 }
@@ -200,7 +215,7 @@ select option {
   padding: 13px 4px;
   border-bottom: 0.5px solid var(--border);
   font-size: 15px;
-  border-radius: 8px;
+  border-radius: 12px;
   transition: background 0.12s ease;
 }
 
@@ -224,7 +239,7 @@ select option {
 @media (max-width: 720px) {
   .shell { padding: 18px 16px; }
   .tabs button { font-size: 12px; padding: 7px; min-width: 64px; }
-  .card { padding: 14px; border-radius: 14px; }
+  .card { padding: 14px; border-radius: 18px; }
 }
 
 /* 09/08/2026 — cards de KPI (Painel: Faturamento/Compras/CMV/etc.) e qualquer valor em R$
@@ -274,7 +289,7 @@ select option {
 .sidebar-nav-grupo { display: flex; flex-direction: column; gap: 2px; }
 .sidebar-nav-item {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  border-radius: 10px; background: transparent; border: none; color: var(--text);
+  border-radius: 14px; background: transparent; border: none; color: var(--text);
   font-size: 14px; text-align: left; width: 100%;
 }
 .sidebar-nav-item.active { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 600; }
@@ -284,7 +299,7 @@ select option {
   display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
 }
 .btn-menu {
-  width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
   padding: 0; background: var(--surface-2); border: 0.5px solid var(--border); flex-shrink: 0;
 }
 
@@ -302,7 +317,7 @@ select option {
   gap: 2px;
   background: var(--surface-2);
   border: 0.5px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 2px;
 }
 
@@ -312,7 +327,7 @@ select option {
   border: none;
   padding: 8px;
   font-size: 14px;
-  border-radius: 8px;
+  border-radius: 11px;
 }
 
 .segmented button.active {
@@ -334,14 +349,16 @@ select option {
   gap: 2px;
   background: var(--surface-2);
   border: 0.5px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 2px;
   margin: 20px 0;
 }
-.tabs button { flex: 1; min-width: 80px; background: transparent; border: none; font-size: 13px; padding: 8px; border-radius: 8px; }
+.tabs button { flex: 1; min-width: 80px; background: transparent; border: none; font-size: 13px; padding: 8px; border-radius: 11px; }
 .tabs button.active { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 600; }
 
-.badge { font-size: 11px; padding: 4px 9px; border-radius: 7px; white-space: nowrap; font-weight: 500; }
+/* 09/09/2026: badge virou pílula (border-radius 999px) — pedido do Felipe, mesmo tratamento
+   testado nas opções de paleta (K/M). */
+.badge { font-size: 11px; padding: 4px 10px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
 .badge-industrializado { background: var(--accent-soft); color: var(--accent-soft-text); }
 .badge-interno { background: rgba(63, 125, 74, 0.16); color: var(--success); }
 .badge-sem_codigo { background: rgba(201, 121, 30, 0.16); color: var(--warning); }

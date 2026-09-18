@@ -3,6 +3,7 @@ import ImportarEverest from './ImportarEverest'
 import ImportarVendas from './ImportarVendas'
 import ImportarFichasTecnicas from './ImportarFichasTecnicas'
 import ImportarCompras from './ImportarCompras'
+import ImportarNcm from './ImportarNcm'
 
 // Unifica os 4 uploads do Everest numa página só, em abas — antes eram 4 abas separadas dentro de
 // "Base de dados" (Produtos/Importar base, Vendas/Importar Everest, Ficha técnica/Importar FT,
@@ -13,7 +14,9 @@ const ABAS = [
   { id: 'produtos', label: 'Produtos' },
   { id: 'vendas', label: 'Vendas' },
   { id: 'fichas', label: 'Ficha técnica' },
-  { id: 'entradas', label: 'Entradas / Compras' }
+  { id: 'entradas', label: 'Entradas / Compras' },
+  // 03/09/2026: aba reposta (§22). Existia no app publicado e sumiu da árvore versionada (§74).
+  { id: 'ncm', label: 'NCM' }
 ]
 
 export default function ImportarDados() {
@@ -38,6 +41,7 @@ export default function ImportarDados() {
       {aba === 'vendas' && <ImportarVendas />}
       {aba === 'fichas' && <ImportarFichasTecnicas />}
       {aba === 'entradas' && <ImportarCompras />}
+      {aba === 'ncm' && <ImportarNcm />}
     </div>
   )
 }

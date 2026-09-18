@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts'
-import { buscarCurvaDeVendas, buscarConsumoTeorico, buscarSubgruposDeVenda, LOJAS_VALIDAS, LOJAS_LABEL } from '../lib/adminApi'
+import { buscarCurvaDeVendas, buscarConsumoTeorico, buscarSubgruposDeVenda, buscarCMVPonderadoPorItem, buscarSaldoTeoricoAcumulado, LOJAS_VALIDAS, LOJAS_LABEL } from '../lib/adminApi'
 import { formatarMoeda, formatarNumero, formatarPercentual } from '../lib/formato'
 
 function primeiroDiaMesAtual() {
@@ -424,7 +424,11 @@ function MatrizBCG({ itens }) {
 }
 
 export default function AnaliseCusto() {
-  const [modo, setModo] = useState('curva') // 'curva' | 'consumo'
+  // 03/09/2026: as abas 'ponderado' e 'saldo' foram REPOSTAS. As funções existiam em
+  // `adminApi.js` sem nenhuma tela chamando — a versão desta página no repositório é anterior à
+  // entrega que as adicionou (ver §74). Nenhuma conta foi alterada: as duas abas só exibem o que
+  // as funções já devolviam.
+  const [modo, setModo] = useState('curva') // 'curva' | 'consumo' | 'ponderado' | 'saldo'
   const [dataInicio, setDataInicio] = useState(primeiroDiaMesAtual())
   const [dataFim, setDataFim] = useState(hojeIso())
   const [loja, setLoja] = useState('') // '' = todas as lojas
@@ -433,6 +437,10 @@ export default function AnaliseCusto() {
   const [carregando, setCarregando] = useState(false)
   const [curva, setCurva] = useState(null)
   const [consumo, setConsumo] = useState(null)
+  const [ponderado, setPonderado] = useState(null)
+  const [saldo, setSaldo] = useState(null)
+  // Quantos meses a aba "Saldo acumulado" olha pra trás a partir do mês do filtro de data.
+  const [mesesJanela, setMesesJanela] = useState(6)
   const [erro, setErro] = useState('')
 
   const [ordenarPor, setOrdenarPor] = useState('quantidade')
@@ -450,6 +458,15 @@ export default function AnaliseCusto() {
       const filtroSubgrupo = subgrupo || null
       if (modo === 'curva') setCurva(await buscarCurvaDeVendas(dataInicio, dataFim, filtroLoja, filtroSubgrupo))
       if (modo === 'consumo') setConsumo(await buscarConsumoTeorico(dataInicio, dataFim, filtroLoja, filtroSubgrupo))
+      if (modo === 'ponderado') setPonderado(await buscarCMVPonderadoPorItem(dataInicio, dataFim, filtroLoja, filtroSubgrupo))
+      if (modo === 'saldo') {
+        // A janela termina no mês da data final escolhida e anda `mesesJanela` pra trás.
+        const fim = new Date(dataFim)
+        setSaldo(await buscarSaldoTeoricoAcumulado({
+          mesFinal: fim.getMonth() + 1, anoFinal: fim.getFullYear(),
+          meses: mesesJanela, loja: filtroLoja, subgrupo: filtroSubgrupo
+        }))
+      }
     } catch (e) {
       setErro(e.message)
     } finally {
@@ -493,6 +510,8 @@ export default function AnaliseCusto() {
         <div className="segmented" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
           <button className={modo === 'curva' ? 'active' : ''} onClick={() => setModo('curva')}>Curva de vendas</button>
           <button className={modo === 'consumo' ? 'active' : ''} onClick={() => setModo('consumo')}>Consumo teórico</button>
+          <button className={modo === 'ponderado' ? 'active' : ''} onClick={() => setModo('ponderado')}>CMV ponderado</button>
+          <button className={modo === 'saldo' ? 'active' : ''} onClick={() => setModo('saldo')}>Saldo acumulado</button>
         </div>
 
         {/* Mesmo filtro nas 3 telas: período, loja e grupo (alimentos/bebidas). 11/08/2026: cada
@@ -651,6 +670,129 @@ export default function AnaliseCusto() {
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+      )}
+
+      {/* ── CMV PONDERADO POR ITEM (reposta, ver §74) ─────────────────────────────────────────
+          "Ponderado" = custo teórico total ÷ venda total do período. Cada prato pesa o quanto
+          vende; não é a média simples dos CMV de cada item. O item acima dessa média geral vem
+          destacado — é o mesmo número do resumo, pra não existirem duas médias diferentes na
+          mesma tela (decisão do §17.6). */}
+      {modo === 'ponderado' && ponderado && (
+        <div className="card" style={{ overflowX: 'auto' }}>
+          <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>CMV ponderado por item</p>
+          <ResumoCabecalho
+            totalVendas={ponderado.totalVendas}
+            totalCustoTeorico={ponderado.totalCustoTeorico}
+            cmvMedio={ponderado.cmvPonderadoGeral}
+            labelFatTotal="Fat. com ficha"
+          />
+          <p className="muted" style={{ margin: '-8px 0 14px', fontSize: 12 }}>
+            Custo total ÷ venda total do período — cada prato pesa o quanto vende. Linha destacada:
+            item acima do CMV ponderado geral.
+          </p>
+
+          {ponderado.linhas.length === 0 ? (
+            <p className="muted">
+              Sem vendas com ficha técnica vinculada nesse período
+              {loja ? `, na loja ${LOJAS_LABEL[loja]}` : ''}
+              {subgrupo ? ` em ${subgrupo}` : ''}.
+            </p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 560 }}>
+              <thead>
+                <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
+                  <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Prato</th>
+                  <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Vendas</th>
+                  <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Custo teórico</th>
+                  <th style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>CMV</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ponderado.linhas.map((l, i) => (
+                  <tr
+                    key={i}
+                    style={{
+                      borderBottom: '0.5px solid var(--border)',
+                      background: l.acimaDaMedia ? 'color-mix(in srgb, var(--danger) 7%, transparent)' : 'transparent'
+                    }}
+                  >
+                    <td style={{ padding: '8px' }}>{l.nome}</td>
+                    <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>{formatarMoeda(l.vendas)}</td>
+                    <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>{formatarMoeda(l.custoTeorico)}</td>
+                    <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: l.acimaDaMedia ? 700 : 500, color: l.acimaDaMedia ? 'var(--danger)' : undefined }}>
+                      {formatarPercentual(l.cmvPonderado)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ── SALDO ACUMULADO (reposta, ver §74) ────────────────────────────────────────────────
+          Compara, mês a mês, a variação de estoque que o modelo teórico implicava (compras −
+          custo teórico das vendas) com a variação que a contagem física mediu. A distância entre
+          as duas, somada ao longo da janela, é o número que interessa: erro de um mês só pode ser
+          contagem mal feita; erro que cresce todo mês é processo. */}
+      {modo === 'saldo' && saldo && (
+        <div className="card" style={{ overflowX: 'auto' }}>
+          <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo acumulado — teórico × estoque real</p>
+          <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>
+            Janela de {mesesJanela} mês(es) terminando no mês da data final. A distância acumulada é
+            a soma das diferenças — é ela que mostra se o desvio é pontual ou constante.
+          </p>
+
+          {saldo.comparacaoParcialPorFiltro && (
+            <p style={{ color: 'var(--warning)', fontSize: 12, margin: '0 0 12px' }}>
+              ⚠ Com filtro de loja ou grupo ativo, o lado teórico está filtrado mas o lado real não —
+              a comparação fica parcial. Pra comparar com precisão, tire os filtros.
+            </p>
+          )}
+
+          {saldo.linhas.length === 0 ? (
+            <p className="muted">Sem inventário suficiente nessa janela pra montar a comparação.</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 760 }}>
+              <thead>
+                <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
+                  {['Mês', 'Compras', 'Custo teórico', 'Var. teórica (mês)', 'Var. estoque real (mês)', 'Distância (gap)', 'Distância acumulada (gap)'].map((c, i) => (
+                    <th key={c} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {saldo.linhas.map((l) => {
+                  const num = { padding: '8px', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }
+                  const ruim = l.diferencaCustoPerdido != null && l.diferencaCustoPerdido < -0.01
+                  return (
+                    <tr key={`${l.ano}-${l.mes}`} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                      <td style={{ padding: '8px', whiteSpace: 'nowrap', fontWeight: 600 }}>{String(l.mes).padStart(2, '0')}/{l.ano}</td>
+                      <td style={num}>{formatarMoeda(l.comprasPeriodo)}</td>
+                      <td style={num}>{l.custoTeoricoExtrapolado == null ? '—' : formatarMoeda(l.custoTeoricoExtrapolado)}</td>
+                      <td style={num}>{l.variacaoTeoricaImplicita == null ? '—' : formatarMoeda(l.variacaoTeoricaImplicita)}</td>
+                      <td style={num}>{formatarMoeda(l.variacaoEstoqueReal)}</td>
+                      <td style={{ ...num, color: ruim ? 'var(--danger)' : undefined, fontWeight: ruim ? 700 : 500 }}>
+                        {l.diferencaCustoPerdido == null ? '—' : formatarMoeda(l.diferencaCustoPerdido)}
+                      </td>
+                      <td style={{ ...num, fontWeight: 700 }}>{formatarMoeda(l.diferencaAcumulada)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+
+          {/* Item contado sem custo médio recente não entra no valor do estoque. Sem dizer isso, a
+              variação real aparece menor do que é e a distância parece maior do que foi. */}
+          {saldo.linhas.some((l) => l.itensEstoqueSemCusto > 0) && (
+            <p className="muted" style={{ margin: '10px 0 0', fontSize: 11 }}>
+              Em algum mês da janela houve item do estoque contado sem preço de compra conhecido pra
+              valorizar — esses ficam de fora do valor, então a variação real sai subestimada nesses
+              meses.
+            </p>
           )}
         </div>
       )}

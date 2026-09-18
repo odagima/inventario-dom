@@ -43,6 +43,7 @@ alter table produtos add column if not exists subgrupo_everest text;
 alter table produtos add column if not exists venda boolean;
 alter table produtos add column if not exists compra boolean;
 alter table produtos add column if not exists empresa text;
+alter table produtos add column if not exists ncm text; -- v11 (18/08/2026) — classificação fiscal, pra Exportação contábil
 
 create table if not exists siglas_internas (
   sigla text primary key,
@@ -76,13 +77,14 @@ create index if not exists idx_barcodes_produto on barcodes (produto_id);
 -- 4. Sessões de contagem (uma "rodada" de inventário por unidade)
 create table if not exists sessoes_contagem (
   id uuid primary key default uuid_generate_v4(),
-  unidade_id uuid not null references unidades(id),
+  unidade_id uuid references unidades(id), -- opcional desde a migration_v6: contagem semanal e registro de perdas não têm loja
   usuario text not null,
   tipo text not null default 'mensal' check (tipo in ('mensal', 'semanal', 'diario', 'outros', 'producao', 'perdas')),
   grupo_id uuid, -- referência ao grupo usado (só quando tipo = 'parcial'; ver tabela grupos_contagem)
   mes_referencia integer not null default extract(month from now()), -- 1-12
   ano_referencia integer not null default extract(year from now()),
-  data_referencia date, -- dia real da contagem (semanal) — editável no lançamento; iniciada_em continua sendo o timestamp real de criação
+  data_referencia date, -- dia real da contagem (semanal/perdas) — editável no lançamento; iniciada_em continua sendo o timestamp real de criação
+  turno text, -- 'almoco' | 'jantar' — só em tipo = 'perdas' (lançamento é por turno; ver migration_v13.sql)
   status text not null default 'em_andamento' check (status in ('em_andamento', 'finalizada')),
   iniciada_em timestamptz not null default now(),
   finalizada_em timestamptz
@@ -96,6 +98,7 @@ create table if not exists grupos_contagem (
   nome text not null,
   created_at timestamptz not null default now()
 );
+alter table grupos_contagem add column if not exists ativo boolean not null default true; -- v12 (24/08/2026) — ativar/desativar sem apagar
 
 alter table sessoes_contagem
   add constraint fk_sessoes_grupo foreign key (grupo_id) references grupos_contagem(id) on delete set null;
@@ -128,10 +131,21 @@ create table if not exists itens_contagem (
   qtd_embalagens numeric, -- preenchido só quando modo_entrada = 'embalagem'
   peso_embalagem numeric, -- preenchido só quando modo_entrada = 'embalagem'; varia a cada contagem
   quantidade numeric not null, -- total convertido: qtd_embalagens * peso_embalagem, ou o valor direto
+  motivo_perda text, -- só em sessão tipo 'perdas': 'estragado' | 'sobra_praca' | 'erro_preparo' (ver migration_v13.sql)
+  modo_perda text, -- só em sessão tipo 'perdas': 'peso' (quantidade na unidade de estoque) | 'prato' (quantidade = nº de porções de um PRODUTO ACABADO)
   registrado_em timestamptz not null default now()
 );
 
 create index if not exists idx_itens_sessao on itens_contagem (sessao_id);
+
+-- v10 (17/08/2026) — quem lançou cada item (nome de login/PIN) e quem de fato finalizou a
+-- sessão (pode diferir de `sessoes_contagem.usuario`, que é só quem ABRIU) — pedido do Felipe
+-- depois de uma contagem aparecer com o nome dele sem ele lembrar de ter enviado. Ver
+-- migration_v10.sql (também corrige, no código, a busca de "sessão em andamento" pra nunca mais
+-- cruzar sessão entre datas/usuários diferentes).
+alter table itens_contagem add column if not exists usuario text;
+alter table sessoes_contagem add column if not exists usuario_finalizou text;
+create index if not exists idx_itens_contagem_usuario on itens_contagem (usuario);
 
 -- Saídas registradas DURANTE a contagem: itens retirados/usados no momento do inventário.
 -- A contagem original é preservada; a saída fica à parte (rastreável). Estoque efetivo =

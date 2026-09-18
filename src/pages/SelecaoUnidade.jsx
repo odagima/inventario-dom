@@ -12,9 +12,10 @@ import {
 import BuscaProduto from '../components/BuscaProduto'
 
 // Contagem semanal não pede loja (Compras não separa por loja no Everest, e a Contagem Semanal
-// já é filtrada por Grupo de contagem) — só Inventário geral e os demais tipos exigem loja.
+// já é filtrada por Grupo de contagem). 28/08/2026: perdas também não — é lançamento de cozinha,
+// por turno, e pedir loja só adicionava um passo obrigatório sem uso no relatório.
 function tipoExigeLoja(tipo) {
-  return tipo !== 'semanal'
+  return tipo !== 'semanal' && tipo !== 'perdas'
 }
 
 const TIPOS_CONTAGEM = [
@@ -26,8 +27,27 @@ const TIPOS_CONTAGEM = [
 ]
 const POR_VALOR = Object.fromEntries(TIPOS_CONTAGEM.map((t) => [t.valor, t]))
 
+// Tipos que representam um DIA específico (e não um mês fechado), então pedem a data na abertura:
+// a contagem semanal desde 06/08/2026 (§18.1) e o registro de perdas desde 28/08/2026 (§55) —
+// nos dois casos o lançamento costuma ser feito depois do ocorrido, então a data precisa ser
+// editável em vez de assumir "hoje" em silêncio.
+function tipoUsaData(tipo) {
+  return tipo === 'semanal' || tipo === 'perdas'
+}
+
+const TURNOS = [
+  { valor: 'almoco', label: 'Almoço' },
+  { valor: 'jantar', label: 'Jantar' }
+]
+
 function hojeIso() {
   return new Date().toISOString().slice(0, 10)
+}
+
+// Pré-seleciona o turno pelo relógio — quem lança no fim do almoço não precisa tocar em nada.
+// Continua editável: lançamento feito no dia seguinte é comum.
+function turnoDeAgora() {
+  return new Date().getHours() < 16 ? 'almoco' : 'jantar'
 }
 
 // etapa: 'escolha' (tipo + loja + nome) | 'form' (grupo, se precisar) | 'revisao'
@@ -39,6 +59,7 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
   const [grupos, setGrupos] = useState([])
   const [grupoId, setGrupoId] = useState('')
   const [dataContagem, setDataContagem] = useState(hojeIso())
+  const [turno, setTurno] = useState(turnoDeAgora())
   const [itensRevisao, setItensRevisao] = useState([])
   const [configGeral, setConfigGeral] = useState(null)
   const [carregando, setCarregando] = useState(true)
@@ -79,9 +100,24 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
     setErro('')
     setProcessando(true)
     try {
-      const sessaoExistente = tipoExigeLoja(tipo)
-        ? await buscarSessaoEmAndamento({ unidadeId, tipo })
-        : await buscarSessaoEmAndamento({ grupoId, tipo })
+      // 17/08/2026: `usuario` (isolar por quem está logado — decisão do Felipe: nunca cruzar
+      // sessão entre pessoas diferentes) e `dataReferencia` (só existe pra semanal — isolar por
+      // dia escolhido, não pelo dia mais recente com sessão aberta) — ver fix em
+      // `buscarSessaoEmAndamento` (lib/api.js) e o bug relatado (data 03/08 abrindo sessão de
+      // outra pessoa no dia 17/08).
+      // Perdas não tem loja nem grupo de contagem: o que identifica a sessão é quem está logado +
+      // dia + turno. Sem esses três, retomar "a aberta mais recente" misturaria almoço com jantar.
+      const sessaoExistente = tipo === 'perdas'
+        ? await buscarSessaoEmAndamento({
+            tipo,
+            usuario: usuarioLogado.nome,
+            dataReferencia: dataContagem,
+            turno,
+            semEscopo: true
+          })
+        : tipoExigeLoja(tipo)
+          ? await buscarSessaoEmAndamento({ unidadeId, tipo, usuario: usuarioLogado.nome })
+          : await buscarSessaoEmAndamento({ grupoId, tipo, usuario: usuarioLogado.nome, dataReferencia: tipo === 'semanal' ? dataContagem : undefined })
       if (sessaoExistente) {
         const horasAberta = (Date.now() - new Date(sessaoExistente.iniciada_em).getTime()) / (1000 * 60 * 60)
         const unidade = unidades.find((u) => u.id === unidadeId)
@@ -122,7 +158,7 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
       // Semanal: mês/ano de referência seguem a data escolhida (pode ser retroativa), não o dia
       // real do lançamento — assim uma contagem de segunda lançada só na quarta ainda cai no mês
       // certo pro histórico/relatórios.
-      const [anoData, mesData] = tipo === 'semanal' && dataContagem ? dataContagem.split('-').map(Number) : []
+      const [anoData, mesData] = tipoUsaData(tipo) && dataContagem ? dataContagem.split('-').map(Number) : []
       const sessao = await iniciarSessao({
         unidadeId: tipoExigeLoja(tipo) ? unidadeId : null,
         usuario: usuarioLogado.nome,
@@ -130,7 +166,8 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
         grupoId: POR_VALOR[tipo]?.usaGrupo ? grupoId : null,
         mesReferencia: tipo === 'mensal' ? configGeral.mesAtivoMensal : (mesData || new Date().getMonth() + 1),
         anoReferencia: tipo === 'mensal' ? configGeral.anoAtivoMensal : (anoData || new Date().getFullYear()),
-        dataReferencia: tipo === 'semanal' ? dataContagem : null,
+        dataReferencia: tipoUsaData(tipo) ? dataContagem : null,
+        turno: tipo === 'perdas' ? turno : null,
         itensEsperadosIds
       })
       const unidade = unidades.find((u) => u.id === unidadeId)
@@ -174,15 +211,16 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
 
   if (sessaoAntigaDetectada) {
     const dias = Math.floor(sessaoAntigaDetectada.horasAberta / 24)
-    const nomeContexto = sessaoAntigaDetectada.unidade?.nome || sessaoAntigaDetectada.grupo?.nome || 'contagem'
+    // Perdas não tem loja nem grupo — cai no rótulo do próprio tipo em vez de "contagem".
+    const nomeContexto = sessaoAntigaDetectada.unidade?.nome || sessaoAntigaDetectada.grupo?.nome || POR_VALOR[tipo]?.label || 'contagem'
     return (
       <div className="screen" style={{ justifyContent: 'center' }}>
         <div className="card">
           <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Sessão antiga em andamento</p>
           <p className="muted" style={{ margin: '0 0 20px' }}>
-            Tem uma contagem de <strong style={{ color: 'var(--text)' }}>{nomeContexto}</strong> iniciada
+            Você tem uma contagem sua de <strong style={{ color: 'var(--text)' }}>{nomeContexto}</strong> iniciada
             {dias >= 1 ? ` há ${dias} ${dias === 1 ? 'dia' : 'dias'}` : ' há mais de 18 horas'}, ainda em andamento.
-            Provavelmente alguém esqueceu de enviar. Quer continuar ela ou começar uma nova (a antiga é encerrada automaticamente)?
+            Provavelmente você esqueceu de enviar. Quer continuar ela ou começar uma nova (a antiga é encerrada automaticamente)?
           </p>
           {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -299,12 +337,37 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
                   </div>
                 )}
 
-                {tipo === 'semanal' && (
+                {tipoUsaData(tipo) && (
                   <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface-2)' }}>
-                    <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>Data da contagem</label>
+                    <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>
+                      {tipo === 'perdas' ? 'Data do ocorrido' : 'Data da contagem'}
+                    </label>
                     <input type="date" value={dataContagem} onChange={(e) => setDataContagem(e.target.value)} />
                     <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
-                      {dataContagem === hojeIso() ? 'Entrando com a data de hoje.' : 'Data alterada — vale como o dia real da contagem.'}
+                      {dataContagem === hojeIso()
+                        ? 'Entrando com a data de hoje.'
+                        : `Data alterada — vale como o dia real ${tipo === 'perdas' ? 'da perda' : 'da contagem'}.`}
+                    </p>
+                  </div>
+                )}
+
+                {tipo === 'perdas' && (
+                  <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface-2)' }}>
+                    <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>Turno</label>
+                    <div className="segmented">
+                      {TURNOS.map((t) => (
+                        <button
+                          key={t.valor}
+                          type="button"
+                          onClick={() => setTurno(t.valor)}
+                          className={turno === t.valor ? 'active' : ''}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+                      {turno === turnoDeAgora() ? 'Turno sugerido pelo horário — dá pra trocar.' : 'Turno alterado manualmente.'}
                     </p>
                   </div>
                 )}

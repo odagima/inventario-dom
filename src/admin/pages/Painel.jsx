@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { buscarPainelResumo, buscarTendenciaPainel, buscarCurvaDeVendas, corFarolCmv } from '../lib/adminApi'
+import { buscarPainelResumo, buscarTendenciaPainel, buscarCurvaDeVendas, buscarFaturamentoDiario, corFarolCmv } from '../lib/adminApi'
 import { formatarMoeda, formatarNumero, formatarPercentual } from '../lib/formato'
 
 function primeiroDiaMesAtual() {
@@ -213,6 +213,59 @@ function PopupCmvReal({ d, onClose }) {
 
 const FAROL_COR = { alto: 'var(--danger)', atencao: 'var(--warning)', ok: 'var(--success)' }
 
+// Média móvel de faturamento (reposta 03/09/2026, ver §74) — `buscarFaturamentoDiario` existia no
+// `adminApi.js` sem nenhuma tela chamando. Enquanto a Tendência mostra o mês fechado, esta mostra
+// o dia a dia: é onde se enxerga queda de movimento em curso, que a barra mensal só revela depois.
+//
+// A média de 7 dias é calculada aqui, na tela, e não no `adminApi`: a função devolve a série
+// diária crua (com os dias sem venda preenchidos em zero, de propósito — buraco no meio quebraria
+// a janela), e a suavização é decisão de apresentação.
+function MediaMovelFaturamento({ dados }) {
+  if (!dados || dados.length === 0) return null
+
+  const serie = dados.map((ponto, i) => {
+    const janela = dados.slice(Math.max(0, i - 6), i + 1)
+    const media = janela.reduce((acc, p) => acc + p.faturamento, 0) / janela.length
+    const [, mes, dia] = ponto.data.split('-')
+    return {
+      label: `${dia}/${mes}`,
+      faturamento: ponto.faturamento,
+      media: Math.round(media * 100) / 100
+    }
+  })
+
+  return (
+    <div className="card">
+      <p style={{ margin: '0 0 2px', fontWeight: 600, fontSize: 15 }}>Faturamento diário</p>
+      <p className="muted" style={{ margin: '0 0 10px', fontSize: 12 }}>
+        Últimos 90 dias. A linha é a média móvel de 7 dias — tira o efeito de dia da semana e deixa
+        a tendência visível.
+      </p>
+      <div style={{ width: '100%', height: 220 }}>
+        <ResponsiveContainer>
+          <ComposedChart data={serie}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            {/* Com 90 pontos, rotular todo dia vira borrão — mostra 1 a cada 7. */}
+            <XAxis dataKey="label" stroke="var(--text-secondary)" fontSize={11} interval={6} />
+            <YAxis stroke="var(--text-secondary)" fontSize={12} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+            <Tooltip
+              cursor={{ fill: 'rgba(28,43,68,0.06)' }}
+              contentStyle={{ background: 'var(--header-bg)', border: '0.5px solid rgba(244,241,233,0.15)', borderRadius: 8, color: 'var(--header-text)' }}
+              formatter={(value, name) => [formatarMoeda(value), name]}
+            />
+            {/* 09/09/2026: cores trocadas — `var(--accent)` (barra) e `var(--danger)` (linha)
+                estavam saindo no mesmo tom nesta paleta (os dois são tons quentes). Passou a usar
+                hex fixo da paleta Grupo DOM (§14 do doc de decisões): barra em laranja, linha em
+                azul marinho — contraste garantido, não depende de como `--danger` está definido. */}
+            <Bar dataKey="faturamento" name="Faturamento do dia" fill="var(--dom-laranja)" radius={[6, 6, 1, 1]} activeBar={{ fillOpacity: 0.85 }} />
+            <Line type="monotone" dataKey="media" name="Média móvel (7d)" stroke="var(--accent-cool)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
 // Tendência (11/08/2026) — substitui o widget "Dados do período" removido a pedido do Felipe
 // ("não vejo muita função pra ele"). Faturamento (barra, eixo esquerdo) e CMV Real % (linha, eixo
 // direito) dos últimos 6 meses — dá pra ver evolução, não só o retrato do período escolhido nos
@@ -337,6 +390,7 @@ export default function Painel() {
   const [popupFaturamento, setPopupFaturamento] = useState(false)
   const [popupCmv, setPopupCmv] = useState(false)
   const [tendencia, setTendencia] = useState(null)
+  const [faturamentoDiario, setFaturamentoDiario] = useState(null)
   const [curvaAtual, setCurvaAtual] = useState(null)
 
   useEffect(() => {
@@ -358,6 +412,8 @@ export default function Painel() {
   useEffect(() => {
     let vivo = true
     buscarTendenciaPainel(6).then((r) => { if (vivo) setTendencia(r) }).catch(() => {})
+    // Mesma regra da Tendência: sempre os últimos 90 dias, independente do filtro de data.
+    buscarFaturamentoDiario(null, 90).then((r) => { if (vivo) setFaturamentoDiario(r) }).catch(() => {})
     return () => { vivo = false }
   }, [])
 
@@ -419,6 +475,7 @@ export default function Painel() {
 
           <div style={{ marginBottom: 12 }}>
             <TendenciaPainel dados={tendencia} />
+            <MediaMovelFaturamento dados={faturamentoDiario} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: 12 }}>
             <AlertasPainel d={d} curva={curvaAtual} />

@@ -17,6 +17,62 @@ async function buscarTodasAsLinhas(construirQuery) {
   return tudo
 }
 
+// 25/08/2026 — QUINTA reincidência do mesmo bug (ver DECISOES-TRAVADAS.md §10, §22.1, §25.1 e
+// agora §29): um `.in('coluna', listaGigante)` sem quebrar em lotes gera uma URL que passa do
+// limite do PostgREST e volta "Bad Request". O motivo de voltar sempre é que o padrão de lote de
+// 300 estava COPIADO À MÃO em ~15 lugares e esquecido em outros ~10 — nunca houve um helper. Este
+// é o helper: quebra a lista de ids em lotes de 300 E pagina as linhas de cada lote (as duas coisas
+// que precisam acontecer juntas). Toda consulta nova com `.in()` numa lista que cresce com o
+// período/cadastro deve passar por aqui, nunca montar o `.in()` na mão.
+// 25/08/2026: "coluna não existe" chega em mais de um formato dependendo de onde bate — `42703` é o
+// erro do Postgres, mas o PostgREST devolve `PGRST204` ("Could not find the 'x' column ... in the
+// schema cache") quando a coluna falta num INSERT/UPDATE. O código só tratava o primeiro, então a
+// leitura caía no fallback certinho e a GRAVAÇÃO estourava com a mensagem crua na tela (visto em
+// Grupos de contagem → Desativar, 25/08/2026). Ver §31.
+function ehColunaAusente(error) {
+  if (!error) return false
+  if (error.code === '42703' || error.code === 'PGRST204') return true
+  return /schema cache|column .* does not exist/i.test(error.message || '')
+}
+
+// 02/09/2026 (§67) — mesmo problema do helper acima, um nível acima: "tabela não existe" chega como
+// `42P01` do Postgres e como `PGRST205` ("Could not find the table 'public.x' in the schema cache")
+// do PostgREST. Serve pra telas que dependem de migração ainda não rodada poderem dizer "falta
+// rodar a migration_vNN" em vez de mostrar a mensagem genérica de internet — que é exatamente o
+// que aconteceu com a tela de Produção antes da v14 ("Could not find the table 'public.producoes'").
+// Mesma família: a RPC existe com OUTRA assinatura (parâmetros novos) porque a migração que a
+// reescreve ainda não rodou. O PostgREST responde `PGRST202` ("Could not find the function ... with
+// parameters"). Sem tratar isso, a tela de usuários fica inutilizável entre subir o código e rodar
+// a migração — e a ordem dessas duas coisas nunca é garantida (o Felipe sobe o dist e roda o SQL em
+// momentos diferentes).
+function ehFuncaoAusente(error) {
+  if (!error) return false
+  if (error.code === 'PGRST202' || error.code === '42883') return true
+  return /Could not find the function|function .* does not exist/i.test(error.message || '')
+}
+
+function ehTabelaAusente(error) {
+  if (!error) return false
+  if (error.code === '42P01' || error.code === 'PGRST205') return true
+  return /Could not find the table|relation .* does not exist/i.test(error.message || '')
+}
+
+const TAMANHO_LOTE_IN = 300
+async function buscarPorIdsEmLotes(construirQuery, ids) {
+  // Guarda-corpo: esquecer o 2º argumento devolvia [] silenciosamente — foi assim que "Compras no
+  // período" zerou na Análise de Custo em 25/08/2026. Lista ausente é bug de código, não "nenhum
+  // resultado", então quebra alto em vez de devolver vazio parecendo dado legítimo.
+  if (ids === undefined) throw new Error('buscarPorIdsEmLotes: lista de ids não foi passada (2º argumento)')
+  const unicos = [...new Set((ids || []).filter((v) => v != null))]
+  if (!unicos.length) return []
+  let tudo = []
+  for (let i = 0; i < unicos.length; i += TAMANHO_LOTE_IN) {
+    const lote = unicos.slice(i, i + TAMANHO_LOTE_IN)
+    tudo = tudo.concat(await buscarTodasAsLinhas(() => construirQuery(lote)))
+  }
+  return tudo
+}
+
 // Resolve código Everest → id do produto no cadastro ATUAL (`produtos`), em lotes de 300 (URL
 // grande estoura em lote maior — mesmo limite já usado nos importadores). Usado pelos relatórios
 // que precisam vincular um item já salvo (venda, compra) ao produto de hoje SEM confiar no
@@ -56,7 +112,7 @@ async function resolverFichasPorCodigoEverest(codigos) {
   const TAMANHO_LOTE = 300
   for (let i = 0; i < codigosUnicos.length; i += TAMANHO_LOTE) {
     const lote = codigosUnicos.slice(i, i + TAMANHO_LOTE)
-    const { data, error } = await supabase.from('fichas_tecnicas').select('id, codigo_everest, quantidade_producao, custo_producao').in('codigo_everest', lote)
+    const { data, error } = await supabase.from('fichas_tecnicas').select('id, codigo_everest, nome, quantidade_producao, custo_producao').in('codigo_everest', lote)
     if (error) throw error
     for (const f of data) fichaPorCodigo.set(f.codigo_everest, f)
   }
@@ -390,6 +446,9 @@ export async function resetarFichasTecnicas() {
   // Cascade cuida de fichas_tecnicas_ingredientes.
   const { error } = await supabase.from('fichas_tecnicas').delete().neq('id', '00000000-0000-0000-0000-000000000000')
   if (error) throw error
+  // Zerar as fichas sem limpar o cache era ainda pior que o caso do import: os relatórios
+  // continuariam calculando em cima de fichas que não existem mais.
+  invalidarCacheFichas()
 }
 
 export async function resetarVendasImportadas() {
@@ -995,6 +1054,83 @@ function selecionarIngredientesDeConsumo(lista) {
   return deConsumo.length ? deConsumo : lista
 }
 
+// 13/08/2026, pedido do Felipe: "DOM MN DEGUSTAÇÃO" é o prato mais vendido do grupo e o que mais
+// pesa no CMV ponderado — enquanto a ficha dele não vier com o custo certo dos ingredientes (fica
+// zerado quando nenhuma linha vem marcada "Consumo", ou os custos unitários chegam vazios do
+// Everest), deixar o custo cair pra R$0 subestima o CMV real do grupo inteiro (o prato pesa muito
+// no total). Trava em R$325,00 só nesse caso — no dia que a ficha subir com um custo > 0 de
+// verdade, o travamento para de valer sozinho (a condição é "custo calculado = 0", nunca "sempre
+// usa 325"). Pedido só pra essa ficha, pelo NOME (Felipe não passou o código Everest ainda — se
+// mandar, troca pra casar por código, mais seguro que nome). Ver DECISOES-TRAVADAS.md §8.
+const FICHAS_COM_CUSTO_TRAVADO = {
+  'DOM MN DEGUSTACAO': 325
+}
+
+function normalizarNomeFicha(nome) {
+  return String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toUpperCase()
+}
+
+// Centraliza "custo por unidade da ficha, com trava de fallback" — usado tanto no import (grava o
+// valor já travado em `custo_producao`, efeito permanente) quanto em cada tela que lê
+// `custo_producao` direto do banco (efeito imediato, sem esperar reimportação da Ficha Técnica).
+//
+// 14/08/2026 (4), pedido do Felipe: a trava só disparava quando a SOMA total dos ingredientes
+// vinha exatamente 0 — mas uma ficha pode vir PARCIALMENTE preenchida (ex.: 2 de 3 ingredientes de
+// Consumo com custo unitário zerado/vazio no Everest) e a soma parcial dá um número > 0 (ex.
+// R$150) que passava batido pela trava, mesmo sendo um custo incompleto/subestimado. Agora recebe
+// também `fichaIncompleta` (true = achou pelo menos 1 linha de Consumo com custo zerado/vazio
+// nessa ficha) — se vier true, usa o valor travado mesmo com soma > 0. "Custo calculado = 0" e
+// "ficha incompleta" viram os 2 gatilhos (qualquer um dos dois já ativa a trava).
+function aplicarTravaDeCusto(nomeFicha, custoCalculado, fichaIncompleta = false) {
+  const custo = Number(custoCalculado) || 0
+  const travado = FICHAS_COM_CUSTO_TRAVADO[normalizarNomeFicha(nomeFicha)]
+  if (travado == null) return custo
+  if (custo <= 0 || fichaIncompleta) return travado
+  return custo
+}
+
+// 14/08/2026 (4): descobre, só pras fichas que têm trava cadastrada (`FICHAS_COM_CUSTO_TRAVADO` —
+// hoje só "DOM MN DEGUSTACAO"), se alguma linha de Consumo está com custo unitário zerado/vazio —
+// sinal de ficha incompleta (import parcial, Everest não trouxe o valor daquele ingrediente). Usado
+// pelas telas que leem `custo_producao` já salvo, pra pegar esse caso mesmo sem reimportar a Ficha
+// Técnica. Calculado 1x (2 queries pequenas, só pra essa(s) ficha(s) nomeada(s)) e cacheado durante
+// a sessão do navegador — se o Felipe reimportar Ficha Técnica e quiser ver o efeito imediato desse
+// diagnóstico específico.
+// 28/08/2026: este cache tinha a MESMA falha de `carregarFichasParaConversao` — e o comentário
+// antigo aqui registrava isso como "limitação aceita: recarregue a página". Não é aceitável:
+// significa mostrar número velho depois de um import bem-sucedido, sem avisar ninguém. Os dois
+// passaram a ser limpos por `invalidarCacheFichas()`, chamada em todo caminho que escreve ou
+// apaga fichas técnicas.
+let _cacheFichasTravadasIncompletas = null
+async function fichasTravadasIncompletas() {
+  if (_cacheFichasTravadasIncompletas) return _cacheFichasTravadasIncompletas
+  const resultado = new Set() // nomes normalizados com pelo menos 1 linha de Consumo com custo zerado/vazio
+  const nomesTravados = Object.keys(FICHAS_COM_CUSTO_TRAVADO)
+  if (nomesTravados.length) {
+    const { data: fichas } = await supabase.from('fichas_tecnicas').select('id, nome')
+    const fichasTravadas = (fichas || []).filter((f) => nomesTravados.includes(normalizarNomeFicha(f.nome)))
+    const idsTravados = fichasTravadas.map((f) => f.id)
+    if (idsTravados.length) {
+      const nomePorId = new Map(fichasTravadas.map((f) => [f.id, normalizarNomeFicha(f.nome)]))
+      const { data: ings } = await supabase.from('fichas_tecnicas_ingredientes')
+        .select('ficha_id, custo_unitario, tipo_baixa')
+        .in('ficha_id', idsTravados)
+      const porFicha = new Map()
+      for (const ing of (ings || [])) {
+        if (!porFicha.has(ing.ficha_id)) porFicha.set(ing.ficha_id, [])
+        porFicha.get(ing.ficha_id).push(ing)
+      }
+      for (const [fichaId, linhas] of porFicha) {
+        const consumo = selecionarIngredientesDeConsumo(linhas)
+        const temZerada = consumo.some((l) => !(Number(l.custo_unitario) > 0))
+        if (temZerada) resultado.add(nomePorId.get(fichaId))
+      }
+    }
+  }
+  _cacheFichasTravadasIncompletas = resultado
+  return resultado
+}
+
 export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
   if (!linhasBrutas.length) return { fichas: 0, ingredientes: 0, semCorrespondencia: 0, linhasIgnoradas: 0 }
 
@@ -1029,6 +1165,11 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
       })
     }
 
+    // 24/08/2026, achado do Felipe ("as fichas técnicas estão triplicando ou até mais os itens"):
+    // guardo a versão/data-versão DESSA LINHA (não só a do cabeçalho da ficha) — usada abaixo, após
+    // o loop, pra filtrar ingrediente repetido quando o relatório do Everest traz mais de uma
+    // versão da mesma ficha na mesma exportação (ver `removerIngredientesDuplicados`).
+    const dVersaoLinhaBruta = linha[FICHA_COL.PRATO_D_VERSAO]
     pratosMap.get(codigoPrato).ingredientes.push({
       codigo: codigoIng,
       nome: String(linha[FICHA_COL.ING_NOME] ?? '').trim() || null,
@@ -1041,11 +1182,72 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
       quantidadeBaixaEstoque: Number(linha[FICHA_COL.ING_Q_BAIXA]) || 0,
       quantidadeAplicada: Number(linha[FICHA_COL.ING_Q_UTILIZADA]) || 0,
       custoMedio: linha[FICHA_COL.ING_CUSTO_MEDIO] != null ? Number(linha[FICHA_COL.ING_CUSTO_MEDIO]) : null,
-      custoUnitario: linha[FICHA_COL.ING_CUSTO_UNIT] != null ? Number(linha[FICHA_COL.ING_CUSTO_UNIT]) : null
+      custoUnitario: linha[FICHA_COL.ING_CUSTO_UNIT] != null ? Number(linha[FICHA_COL.ING_CUSTO_UNIT]) : null,
+      _versaoLinha: linha[FICHA_COL.PRATO_VERSAO] != null ? String(linha[FICHA_COL.PRATO_VERSAO]) : '',
+      _dataVersaoLinha: dVersaoLinhaBruta instanceof Date ? dVersaoLinhaBruta.toISOString().slice(0, 10) : ''
     })
 
     if (i % 500 === 0) await new Promise((r) => setTimeout(r, 0))
     onProgresso?.({ feito: i + 1, total: resto.length })
+  }
+
+  // 24/08/2026 — corrige o achado do Felipe: reimportar a Ficha Técnica (mesmo no mesmo dia,
+  // repetidas vezes) estava fazendo os ingredientes de uma ficha aparecerem 2-4x na tela (ex.:
+  // "PP FILET MIGNON LIMPEZA" repetido 3x com o MESMO valor dentro da ficha "DD PR ALIGOT COM
+  // FILET"). O import já apagava os ingredientes antigos antes de inserir os novos (linha ~1196,
+  // `delete().eq('ficha_id', ...)` antes do insert) — reimportar sozinho não deveria acumular.
+  // A causa real: o relatório "Ficha Técnica de Produto" do Everest pode trazer, dentro de UM
+  // MESMO arquivo, mais de uma VERSÃO da mesma ficha (ex.: a ficha foi revisada no Everest e o
+  // export ainda inclui as linhas da versão antiga junto com a nova) — o código anterior juntava
+  // as linhas de TODAS as versões no mesmo prato, duplicando o ingrediente. Correção em 2 camadas,
+  // por ficha:
+  //  1) Duplicata EXATA (mesmo código de ingrediente + mesmos números/tipo de baixa) — colapsa pra
+  //     1 linha só. Cobre o caso da mesma linha repetida ao pé da letra.
+  //  2) Quando sobra mais de 1 linha pro MESMO código de ingrediente com valores DIFERENTES (ex.:
+  //     % aproveitamento mudou entre versões) e as linhas têm data/versão diferentes — mantém só
+  //     as linhas da versão MAIS RECENTE (maior data; se a data faltar/empatar, maior número de
+  //     versão). Isso preserva o caso legítimo já documentado (§19.1): o mesmo ingrediente
+  //     aparecendo 2x com custo diferente por ser de empresas diferentes (D.O.M./Dalva) DENTRO DA
+  //     MESMA versão — só corta quando dá pra identificar uma versão mais nova de verdade.
+  let fichasComDuplicataRemovida = 0
+  let ingredientesDuplicadosRemovidos = 0
+  // §46: fichas que vieram no arquivo sem nenhuma linha de ingrediente. Ficam listadas pro Felipe
+  // ver na tela — antes elas passavam batido e zeravam a ficha no banco.
+  const fichasSemIngredientes = []
+  for (const f of pratosMap.values()) {
+    const totalAntes = f.ingredientes.length
+    // Camada 1 — duplicata exata.
+    const vistos = new Set()
+    let semExatas = f.ingredientes.filter((ing) => {
+      const chave = [ing.codigo, ing.quantidadeBaixaEstoque, ing.quantidadeAplicada, ing.fatorAplicacao, ing.percentualAproveitamento, ing.custoUnitario, ing.custoMedio, ing.tipoBaixa].join('|')
+      if (vistos.has(chave)) return false
+      vistos.add(chave)
+      return true
+    })
+    // Camada 2 — mesmo código de ingrediente, valores diferentes, mas dá pra saber qual versão é
+    // mais nova (data ou nº de versão) → mantém só a mais recente por código.
+    const porCodigo = new Map()
+    for (const ing of semExatas) {
+      if (!porCodigo.has(ing.codigo)) porCodigo.set(ing.codigo, [])
+      porCodigo.get(ing.codigo).push(ing)
+    }
+    const resultado = []
+    for (const linhas of porCodigo.values()) {
+      if (linhas.length <= 1) { resultado.push(...linhas); continue }
+      const temInfoDeVersao = linhas.some((l) => l._dataVersaoLinha || l._versaoLinha)
+      if (!temInfoDeVersao) { resultado.push(...linhas); continue } // sem como distinguir — não arrisca cortar dado legítimo (ex. custo por empresa)
+      const maisRecente = linhas.slice().sort((a, b) => {
+        if (a._dataVersaoLinha !== b._dataVersaoLinha) return a._dataVersaoLinha < b._dataVersaoLinha ? 1 : -1
+        return (Number(b._versaoLinha) || 0) - (Number(a._versaoLinha) || 0)
+      })[0]
+      const versaoEscolhida = maisRecente._dataVersaoLinha + '|' + maisRecente._versaoLinha
+      resultado.push(...linhas.filter((l) => (l._dataVersaoLinha + '|' + l._versaoLinha) === versaoEscolhida))
+    }
+    f.ingredientes = resultado.map(({ _versaoLinha, _dataVersaoLinha, ...resto }) => resto)
+    if (f.ingredientes.length < totalAntes) {
+      fichasComDuplicataRemovida += 1
+      ingredientesDuplicadosRemovidos += totalAntes - f.ingredientes.length
+    }
   }
 
   const fichas = Array.from(pratosMap.values())
@@ -1072,6 +1274,11 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
   let fichasSemLinhaConsumo = 0
   let historicoIndisponivel = false
 
+  // Antes de tocar no banco: o que estiver em memória já está obsoleto a partir daqui. Limpo
+  // no início E no fim — se o import falhar no meio, o cache também não pode continuar valendo,
+  // porque parte das fichas já foi gravada.
+  invalidarCacheFichas()
+
   for (const f of fichas) {
     // custo_producao agora representa o custo TEÓRICO de 1 unidade do prato (soma do custo
     // unitário de cada ingrediente); quantidade_producao fica fixo em 1 — mantém compatível
@@ -1082,11 +1289,22 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
     // somar todas duplicava o custo. Se NENHUMA linha da ficha vier marcada "Consumo" (planilha
     // sem essa informação, ou nomenclatura diferente da esperada), não zera o custo em silêncio —
     // cai pro comportamento antigo (soma tudo) e sinaliza a ficha como gap pra revisão manual.
+    // 12/08/2026: cheguei a mudar essa soma pra multiplicar por quantidade (pensando que
+    // `custoUnitario` fosse sempre "preço por kg/lt/un"), mas o Felipe confirmou que o número de
+    // ANTES (só a soma de `custoUnitario`, sem multiplicar) é o que bate com o custo real do
+    // prato — revertido. `custo_unitario`/"V. Custo Unitário" nas linhas de Consumo da ficha já
+    // vem do Everest como a contribuição de custo daquele ingrediente pra 1 unidade do prato,
+    // não como preço por unidade de medida — por isso NÃO se multiplica por quantidade aqui.
     const ingredientesDeConsumo = f.ingredientes.filter((ing) => ehLinhaDeConsumo(ing.tipoBaixa))
     const semLinhaConsumo = ingredientesDeConsumo.length === 0 && f.ingredientes.length > 0
     if (semLinhaConsumo) fichasSemLinhaConsumo += 1
     const baseDeCusto = semLinhaConsumo ? f.ingredientes : ingredientesDeConsumo
-    const custoTeoricoUnidade = baseDeCusto.reduce((acc, ing) => acc + (Number(ing.custoUnitario) || 0), 0)
+    // Trava de custo (ver `aplicarTravaDeCusto` acima) — entra em ação se a soma dos ingredientes
+    // vier 0 OU se algum ingrediente de Consumo vier com custo unitário zerado/vazio (ficha
+    // incompleta — 14/08/2026 (4), pedido do Felipe: "sempre que tiver algum valor zerado na
+    // ficha desse item, considerar 325", não só quando a soma total dá 0).
+    const temIngredienteZerado = baseDeCusto.some((ing) => !(Number(ing.custoUnitario) > 0))
+    const custoTeoricoUnidade = aplicarTravaDeCusto(f.nome, baseDeCusto.reduce((acc, ing) => acc + (Number(ing.custoUnitario) || 0), 0), temIngredienteZerado)
 
     const { data: fichaSalva, error: erroFicha } = await supabase
       .from('fichas_tecnicas')
@@ -1108,9 +1326,15 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
       .single()
     if (erroFicha) throw erroFicha
 
-    // Substitui os ingredientes antigos dessa ficha pelos novos (evita duplicar em reimportações)
-    await supabase.from('fichas_tecnicas_ingredientes').delete().eq('ficha_id', fichaSalva.id)
-
+    // 28/08/2026 (§46) — BUG CORRIGIDO. O `delete` rodava SEMPRE e o `insert` só acontecia se
+    // houvesse linhas: uma ficha que chegasse ao import sem nenhum ingrediente APAGAVA os
+    // ingredientes que já existiam e deixava a ficha vazia, sem avisar. Foi assim que o
+    // "DD PR EXEC CARNE" (1826) ficou com "ficha: sim, 0 linhas" no banco — a ficha existe, não
+    // resolve para insumo nenhum, e sumiu do consumo teórico levando 42 vendas junto (7,861 kg de
+    // filet numa única semana). Ninguém tinha como perceber: a tela de importação dizia sucesso.
+    //
+    // Agora, ficha sem ingrediente NÃO apaga o que já está gravado — é contabilizada e reportada.
+    // Substituir dado bom por nada nunca é o comportamento certo; na dúvida, preserva.
     const ingredientesParaSalvar = f.ingredientes.map((ing) => ({
       ficha_id: fichaSalva.id,
       produto_id: idPorCodigo.get(ing.codigo) || null,
@@ -1128,8 +1352,12 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
       tipo_baixa: ing.tipoBaixa
     }))
     if (ingredientesParaSalvar.length) {
+      // Só apaga quando há algo novo pra colocar no lugar.
+      await supabase.from('fichas_tecnicas_ingredientes').delete().eq('ficha_id', fichaSalva.id)
       const { error: erroIng } = await supabase.from('fichas_tecnicas_ingredientes').insert(ingredientesParaSalvar)
       if (erroIng) throw erroIng
+    } else {
+      fichasSemIngredientes.push(`${f.codigo} — ${f.nome || 'sem nome'}`)
     }
 
     // 10/08/2026, pedido do Felipe ("queremos ter o histórico do preço das FT no tempo"): cada
@@ -1152,7 +1380,11 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
     if (!idPorCodigo.get(f.codigo)) semCorrespondencia += 1
   }
 
-  return { fichas: fichasSalvas, ingredientes: ingredientesSalvos, semCorrespondencia, linhasIgnoradas, fichasSemLinhaConsumo, historicoIndisponivel }
+  // De novo no fim: agora o banco tem as fichas novas, e a próxima tela que pedir conversão
+  // precisa reler do zero em vez de reaproveitar o que ficou em memória durante o import.
+  invalidarCacheFichas()
+
+  return { fichas: fichasSalvas, ingredientes: ingredientesSalvos, semCorrespondencia, linhasIgnoradas, fichasSemLinhaConsumo, historicoIndisponivel, fichasComDuplicataRemovida, ingredientesDuplicadosRemovidos, fichasSemIngredientes }
 }
 
 // 10/08/2026, pedido do Felipe (aba "Importar dados" → Ficha técnica): resumo de todas as fichas
@@ -1161,23 +1393,33 @@ export async function importarFichasTecnicas(linhasBrutas, onProgresso) {
 // "Consumo" já filtradas — ver ehLinhaDeConsumo); os ingredientes vêm todos (inclui os fora do
 // filtro, marcados com `foraDoCalculo`), pra transparência de quem quer auditar a ficha.
 export async function buscarResumoFichasTecnicas() {
-  const { data: fichas, error } = await supabase
-    .from('fichas_tecnicas')
-    .select('id, codigo_everest, nome, fantasia, situacao, custo_producao, atualizado_em')
-    .order('nome')
-  if (error) throw error
+  // 24/08/2026 — corrigido o mesmo bug de sempre (§10/§22.1/§23): a lista de fichas cresce (hoje
+  // ~600 entre DOM+Dalva, ver §16.1) e `.in('ficha_id', idsFichas)` COM A LISTA INTEIRA de uma vez
+  // estoura o limite de URL do PostgREST — o Felipe reportou "as fichas não estão aparecendo", que
+  // é exatamente o sintoma (a consulta falha e a tela cai pro "erro"/lista vazia, mesma classe do
+  // bug corrigido na Exportação Contábil). Também troquei a 1ª consulta (lista de fichas em si) pra
+  // `buscarTodasAsLinhas` — sem paginação de linhas, uma base acima de 1000 fichas devolveria só as
+  // 1000 primeiras em silêncio (limite padrão do PostgREST), mesmo sem dar erro nenhum.
+  const fichas = await buscarTodasAsLinhas(() =>
+    supabase.from('fichas_tecnicas')
+      .select('id, codigo_everest, nome, fantasia, situacao, custo_producao, atualizado_em')
+      .order('nome')
+  )
   if (!fichas.length) return []
 
   const idsFichas = fichas.map((f) => f.id)
-  const ingredientes = await buscarTodasAsLinhas(() =>
-    supabase.from('fichas_tecnicas_ingredientes')
-      .select('ficha_id, nome, custo_unitario, custo_medio, tipo_baixa')
-      .in('ficha_id', idsFichas)
-  )
   const ingredientesPorFicha = new Map()
-  for (const ing of ingredientes) {
-    if (!ingredientesPorFicha.has(ing.ficha_id)) ingredientesPorFicha.set(ing.ficha_id, [])
-    ingredientesPorFicha.get(ing.ficha_id).push(ing)
+  for (let i = 0; i < idsFichas.length; i += 300) {
+    const lote = idsFichas.slice(i, i + 300)
+    const ingredientesDoLote = await buscarTodasAsLinhas(() =>
+      supabase.from('fichas_tecnicas_ingredientes')
+        .select('ficha_id, nome, custo_unitario, custo_medio, tipo_baixa')
+        .in('ficha_id', lote)
+    )
+    for (const ing of ingredientesDoLote) {
+      if (!ingredientesPorFicha.has(ing.ficha_id)) ingredientesPorFicha.set(ing.ficha_id, [])
+      ingredientesPorFicha.get(ing.ficha_id).push(ing)
+    }
   }
 
   return fichas.map((f) => {
@@ -1245,20 +1487,57 @@ export async function buscarHistoricoDeFicha(fichaId) {
     .eq('id', fichaId)
     .maybeSingle()
   if (erroFicha) throw erroFicha
-  if (!ficha) return { indisponivel: false, linhas: [] }
+  if (!ficha) return { indisponivel: false, linhas: [], semPreco: [] }
 
   const { data: ingredientesRaw, error: erroIng } = await supabase
     .from('fichas_tecnicas_ingredientes')
-    .select('codigo_everest, quantidade_baixa_estoque, quantidade_aplicada, tipo_baixa')
+    .select('codigo_everest, nome, quantidade_baixa_estoque, quantidade_aplicada, tipo_baixa')
     .eq('ficha_id', fichaId)
   if (erroIng) throw erroIng
 
   const consumo = selecionarIngredientesDeConsumo(ingredientesRaw || [])
-  const itensParaRastrear = consumo.length
-    ? consumo.map((i) => ({ codigo: i.codigo_everest, quantidade: Number(i.quantidade_baixa_estoque) || Number(i.quantidade_aplicada) || 0 }))
-    : (ficha.codigo_everest ? [{ codigo: ficha.codigo_everest, quantidade: 1 }] : [])
+
+  // 25/08/2026 — BUG CORRIGIDO (ver DECISOES-TRAVADAS.md §29). Antes, esta função procurava preço
+  // de compra para o código de CADA INGREDIENTE DIRETO da ficha. Só que num prato o ingrediente
+  // direto costuma ser um PREPARO (ex. "PP Filet Mignon Medalhão Porcionado") — e preparo NUNCA é
+  // comprado, não existe em `notas_importadas_itens`. Resultado: o insumo caro (a carne) não achava
+  // preço nenhum e caía no `incompleto`, enquanto os poucos ingredientes em natura baratos (sal,
+  // manteiga) eram os únicos somados. Daí o absurdo de "EV PR Filet Mignon com Aligot" aparecer
+  // custando R$ 0,12/mês, com todo mês marcado "(parcial)", enquanto a própria ficha diz R$ 29,18.
+  //
+  // Correção: cada ingrediente que tem ficha própria é resolvido pelo motor já existente
+  // (`buscarInsumosEmNatura`, §19.2) até o insumo em natura de verdade — o que é comprado e tem
+  // preço. A quantidade é multiplicada ao longo do caminho (qtd do ingrediente na ficha × qtd do
+  // insumo por unidade do ingrediente). Ingrediente que já é folha continua entrando direto.
+  const itensParaRastrear = []
+  if (consumo.length) {
+    for (const ing of consumo) {
+      const codigo = ing.codigo_everest
+      if (!codigo) continue
+      const quantidade = Number(ing.quantidade_baixa_estoque) || Number(ing.quantidade_aplicada) || 0
+      const folhas = await buscarInsumosEmNatura(codigo)
+      if (folhas === null) {
+        // Sem ficha própria = já é insumo em natura (o caso comum: comprado direto).
+        itensParaRastrear.push({ codigo, nome: ing.nome || codigo, quantidade, via: null })
+      } else if (!folhas.length) {
+        // Tem ficha, mas nenhuma folha identificável — gap real, não some como zero.
+        itensParaRastrear.push({ codigo, nome: ing.nome || codigo, quantidade, via: null, semFolha: true })
+      } else {
+        for (const f of folhas) {
+          itensParaRastrear.push({
+            codigo: f.codigoEverest,
+            nome: f.nome || f.codigoEverest,
+            quantidade: quantidade * (Number(f.quantidadePorUnidade) || 0),
+            via: ing.nome || codigo
+          })
+        }
+      }
+    }
+  } else if (ficha.codigo_everest) {
+    itensParaRastrear.push({ codigo: ficha.codigo_everest, nome: ficha.codigo_everest, quantidade: 1, via: null })
+  }
   const codigosUnicos = [...new Set(itensParaRastrear.map((i) => i.codigo).filter(Boolean))]
-  if (!codigosUnicos.length) return { indisponivel: false, linhas: [] }
+  if (!codigosUnicos.length) return { indisponivel: false, linhas: [], semPreco: [] }
 
   const TAMANHO_LOTE = 300
   let compras = []
@@ -1275,7 +1554,7 @@ export async function buscarHistoricoDeFicha(fichaId) {
     compras.push(...(data || []))
   }
   compras = compras.filter((c) => c.calcula_cmv !== false && c.notas_importadas?.data_emissao)
-  if (!compras.length) return { indisponivel: false, linhas: [] }
+  if (!compras.length) return { indisponivel: false, linhas: [], semPreco: itensParaRastrear.filter((i) => Number(i.quantidade) > 0).map((i) => ({ nome: i.nome, codigo: i.codigo, via: i.via, motivo: 'nenhuma compra desse insumo foi importada ainda' })) }
 
   // Preço unitário da compra — mesma prioridade já usada em outros lugares do app (ver §24.3):
   // `valor_unitario` (V. Unitário Convertido, já na unidade de estoque) com fallback pro cálculo
@@ -1301,7 +1580,7 @@ export async function buscarHistoricoDeFicha(fichaId) {
 
   const todosMeses = new Set()
   for (const porMes of ultimaCompraPorInsumoMes.values()) for (const mes of porMes.keys()) todosMeses.add(mes)
-  if (!todosMeses.size) return { indisponivel: false, linhas: [] }
+  if (!todosMeses.size) return { indisponivel: false, linhas: [], semPreco: itensParaRastrear.filter((i) => Number(i.quantidade) > 0).map((i) => ({ nome: i.nome, codigo: i.codigo, via: i.via, motivo: 'nenhuma compra desse insumo foi importada ainda' })) }
 
   // Eixo contínuo de meses, do 1º mês com QUALQUER compra de QUALQUER insumo da ficha até o mês
   // atual — sem eixo contínuo o "repete o último preço" não teria como funcionar (precisa saber
@@ -1318,6 +1597,10 @@ export async function buscarHistoricoDeFicha(fichaId) {
     if (m > 12) { m = 1; a += 1 }
   }
 
+  // 25/08/2026: além do flag "(parcial)", devolve QUAIS insumos nunca tiveram preço conhecido —
+  // antes a tela só dizia "parcial" sem nunca revelar o que estava faltando, o que fazia um custo
+  // de R$ 0,12 parecer um número calculado em vez de um número com 90% dos ingredientes de fora.
+  const semPrecoNunca = new Set(itensParaRastrear.map((i) => i.codigo))
   const linhas = eixoMeses.map((mes) => {
     let custoTotal = 0
     let incompleto = false
@@ -1333,12 +1616,29 @@ export async function buscarHistoricoDeFicha(fichaId) {
         }
       }
       if (precoConhecido == null) { incompleto = true; continue }
+      semPrecoNunca.delete(item.codigo)
       custoTotal += precoConhecido * item.quantidade
     }
     return { mes, custo: Math.round(custoTotal * 100) / 100, incompleto, temCompraNoMes }
   })
 
-  return { indisponivel: false, linhas }
+  // 25/08/2026, pedido do Felipe ("se forem aqueles itens que não entram na ficha por causa do
+  // consumo, não precisa mostrar"): só entra nesse aviso o insumo que de fato MUDARIA a conta.
+  // Linha com quantidade 0 não soma nada mesmo tendo ou não preço — reportá-la só gera ruído. O que
+  // sobra aqui é insumo com quantidade real na ficha que nunca teve nenhuma compra importada.
+  const semPreco = itensParaRastrear
+    .filter((i) => semPrecoNunca.has(i.codigo))
+    .filter((i) => Number(i.quantidade) > 0)
+    .map((i) => ({
+      nome: i.nome,
+      codigo: i.codigo,
+      via: i.via,
+      motivo: i.semFolha
+        ? 'tem ficha própria, mas nenhum insumo em natura identificável nela'
+        : 'nenhuma compra desse insumo foi importada ainda'
+    }))
+
+  return { indisponivel: false, linhas, semPreco }
 }
 
 // ---------- Análise de custo (curva de vendas, consumo teórico, CMV) ----------
@@ -1403,6 +1703,39 @@ export async function buscarSubgruposDeVenda() {
     if (sub) set.add(sub)
   }
   return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+}
+
+// 12/08/2026, pedido do Felipe: os filtros de Loja e Grupo da Análise de Custo (Curva de
+// Vendas/CMV Teórico/Consumo Teórico) mostravam sempre a lista INTEIRA (todas as 6 lojas, todos os
+// subgrupos já vistos alguma vez) mesmo quando o período escolhido só tem venda de 2 lojas, ou
+// quando a loja escolhida só tem 3 dos 10 subgrupos possíveis — mesma ideia que já existe em CMV
+// Semanal (filtro de subgrupo do Everest só com o que aparece na consulta) e na Cobertura de Ficha
+// Técnica (só lista loja com venda no período), agora replicada aqui: "condicionado com o que está
+// aparecendo". Devolve só a loja/grupo que TEM pelo menos 1 venda válida (não cancelada, dentro de
+// Alimentos/Bebidas) no período — e, pro grupo, dentro da loja já escolhida (se houver). Consulta
+// enxuta (só as 3 colunas que importam pra essa conta), pensada pra rodar toda vez que o período ou
+// a loja mudam, antes de clicar em "Buscar".
+export async function buscarLojasEGruposDisponiveis(dataInicio, dataFim, loja = null) {
+  const itens = await buscarTodasAsLinhas(() =>
+    supabase.from('vendas_importadas_itens')
+      .select('fantasia, grupo_venda, cancelado')
+      .gte('data_movimento', dataInicio).lte('data_movimento', dataFim)
+  )
+  const lojasComVenda = new Set()
+  const gruposComVenda = new Set()
+  for (const it of itens) {
+    if (it.cancelado) continue
+    if (!GRANDES_GRUPOS_VALIDOS.includes(grandeGrupoDeVenda(it.grupo_venda))) continue
+    const lojaDoItem = lojaDeVenda(it.fantasia, it.grupo_venda)
+    lojasComVenda.add(lojaDoItem)
+    if (loja && lojaDoItem !== loja) continue
+    const sub = subgrupoDeVenda(it.grupo_venda)
+    if (sub) gruposComVenda.add(sub)
+  }
+  return {
+    lojas: LOJAS_VALIDAS.filter((l) => lojasComVenda.has(l)),
+    grupos: Array.from(gruposComVenda).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  }
 }
 
 // 10/08/2026, pedido do Felipe (aba "Importar dados" → Vendas): resumo do que já foi importado —
@@ -1476,7 +1809,7 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
   // recortar período (ver §11 do doc de decisões: "guardar data_movimento no item").
   const itens = await buscarTodasAsLinhas(() =>
     supabase.from('vendas_importadas_itens')
-      .select('produto_id, codigo_everest, nome_original, grupo_venda, fantasia, quantidade, valor_total, valor_unitario, cancelado')
+      .select('produto_id, codigo_everest, nome_original, grupo_venda, fantasia, quantidade, valor_total, valor_unitario, data_movimento, cancelado')
       .gte('data_movimento', dataInicio).lte('data_movimento', dataFim)
   )
 
@@ -1497,6 +1830,7 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
   // reimportados antes da última importação de Ficha Técnica continuavam mostrando "sem ficha
   // técnica" mesmo já revinculados ao produto certo.
   const fichaPorCodigo = await resolverFichasPorCodigoEverest(itens.map((it) => it.codigo_everest))
+  const fichasIncompletas = await fichasTravadasIncompletas()
 
   // Cobertura de ficha técnica (10/08/2026, pedido do Felipe): mede, entre os produtos
   // efetivamente vendidos no período/filtro (Alimentos/Bebidas, já sem cancelados), quantos têm
@@ -1520,7 +1854,12 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
 
     const produtoIdAtual = idAtualPorCodigo.get(it.codigo_everest) || null
     const ficha = fichaPorCodigo.get(it.codigo_everest)
-    const temFicha = !!(produtoIdAtual && ficha?.quantidade_producao && ficha?.custo_producao)
+    // Trava de custo (ver `aplicarTravaDeCusto`) aplicada por unidade — efeito imediato pra quem
+    // lê `custo_producao` direto do banco, sem esperar reimportação da Ficha Técnica.
+    const custoPorUnidadeFicha = ficha?.quantidade_producao
+      ? aplicarTravaDeCusto(ficha.nome, Number(ficha.custo_producao) / Number(ficha.quantidade_producao), fichasIncompletas.has(normalizarNomeFicha(ficha.nome)))
+      : 0
+    const temFicha = !!(produtoIdAtual && custoPorUnidadeFicha > 0)
     const chaveCobertura = produtoIdAtual || it.codigo_everest || it.nome_original
     const balde = temFicha ? 'comFicha' : produtoIdAtual ? 'semFicha' : 'semCorrespondencia'
     coberturaGeral[balde].add(chaveCobertura)
@@ -1529,15 +1868,23 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
 
     if (loja && lojaDoItem !== loja) continue
     const chave = it.codigo_everest || it.nome_original
-    if (!porItem.has(chave)) porItem.set(chave, { codigo: it.codigo_everest, nome: it.nome_original, grupo: it.grupo_venda, quantidade: 0, valorTotal: 0, custoTeorico: 0, semFicha: !temFicha })
+    if (!porItem.has(chave)) porItem.set(chave, { codigo: it.codigo_everest, nome: it.nome_original, grupo: it.grupo_venda, quantidade: 0, valorTotal: 0, custoTeorico: 0, semFicha: !temFicha, ultimoValorUnitario: null, ultimaData: null })
     const g = porItem.get(chave)
     g.quantidade += Number(it.quantidade) || 0
     // 11/08/2026, pedido do Felipe: usa o valor bruto de venda (item + gorjeta de 13%), não só o
     // valor do item — ver `valorVenda`.
     g.valorTotal += valorVenda(it)
+    // 24/08/2026, pedido do Felipe: "Valor unit." (coluna da tabela) deixa de ser a média do
+    // período (valorTotal ÷ quantidade) — mesmo achado do "CMV mais alto no período"
+    // (`buscarMargemCardapio`): sujeira numa linha de venda distorce a média. Guarda o valor
+    // unitário da venda MAIS RECENTE (sem gorjeta, já que essa coluna mostra preço de tabela —
+    // ver comentário mais abaixo sobre não levar a gorjeta pro "Valor unit.").
+    if (it.valor_unitario != null && (!g.ultimaData || String(it.data_movimento) >= String(g.ultimaData))) {
+      g.ultimaData = it.data_movimento
+      g.ultimoValorUnitario = Number(it.valor_unitario)
+    }
     if (temFicha) {
-      const custoPorUnidade = Number(ficha.custo_producao) / Number(ficha.quantidade_producao)
-      g.custoTeorico += custoPorUnidade * (Number(it.quantidade) || 0)
+      g.custoTeorico += custoPorUnidadeFicha * (Number(it.quantidade) || 0)
     } else {
       g.semFicha = true
     }
@@ -1558,10 +1905,15 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
     // motivo do CMV% acima: custo 0 por falta de FT não é um custo unitário de verdade).
     // 12/08/2026, pedido do Felipe: "Valor unit." não deve levar a gorjeta de 13% — só os TOTAIS
     // (valorTotal do item, e os totais do cabeçalho) usam o valor de venda com gorjeta (`valorVenda`,
-    // §29.21). O valor por unidade divide o gorjeta de volta pra fora antes de calcular a média —
-    // senão o número por unidade sai maior que o preço de tabela real, confundindo quem olha a
-    // tabela e compara com o preço do cardápio/Everest.
-    const valorUnitario = item.quantidade > 0 ? Math.round((item.valorTotal / FATOR_GORJETA / item.quantidade) * 100) / 100 : null
+    // §29.21).
+    // 24/08/2026, pedido do Felipe: deixou de ser a MÉDIA do período (valorTotal÷quantidade, sem
+    // gorjeta) — agora é o valor unitário da venda MAIS RECENTE (já sem gorjeta, guardado acima em
+    // `ultimoValorUnitario`) — mesma correção do "CMV mais alto no período" (achado: sujeira numa
+    // linha de venda distorcia a média pra baixo). Sem venda com valor_unitario no período (dado
+    // antigo, pré-migration_v8), cai pro cálculo antigo só como último recurso.
+    const valorUnitario = item.ultimoValorUnitario != null
+      ? Math.round(item.ultimoValorUnitario * 100) / 100
+      : (item.quantidade > 0 ? Math.round((item.valorTotal / FATOR_GORJETA / item.quantidade) * 100) / 100 : null)
     const custoUnitario = (item.quantidade > 0 && !item.semFicha) ? Math.round((item.custoTeorico / item.quantidade) * 100) / 100 : null
     return {
       ...item,
@@ -1570,6 +1922,17 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
       valorUnitario,
       custoUnitario,
       farol: corFarolCmv(custoTeoricoPercentual),
+      // 25/08/2026 (§35), pedido do Felipe: margem de contribuição na Curva ABC.
+      // Valor = quanto esse item deixou depois de pagar o próprio custo de matéria-prima
+      // (venda − custo teórico, no período). % = margem ÷ venda, ou seja, o complemento do CMV%.
+      // Item sem ficha fica null (não dá pra afirmar margem sem custo) — nunca 100%.
+      margemContribuicao: item.semFicha ? null : Math.round((item.valorTotal - item.custoTeorico) * 100) / 100,
+      margemPercentual: (item.semFicha || !(item.valorTotal > 0))
+        ? null
+        : Math.round(((item.valorTotal - item.custoTeorico) / item.valorTotal) * 1000) / 10,
+      margemUnitaria: (valorUnitario != null && custoUnitario != null)
+        ? Math.round((valorUnitario - custoUnitario) * 100) / 100
+        : null,
       percentual: totalGeral > 0 ? (item.valorTotal / totalGeral) * 100 : 0,
       percentualAcumulado,
       curva: percentualAcumulado <= 80 ? 'A' : percentualAcumulado <= 95 ? 'B' : 'C'
@@ -1639,8 +2002,9 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
   const idsNotasPeriodo = (notasPeriodo || []).map((n) => n.id)
   let comprasPeriodo = 0
   if (idsNotasPeriodo.length) {
-    const itensCompraPeriodo = await buscarTodasAsLinhas(() =>
-      supabase.from('notas_importadas_itens').select('nota_id, valor_total, calcula_cmv').in('nota_id', idsNotasPeriodo)
+    const itensCompraPeriodo = await buscarPorIdsEmLotes(
+      (lote) => supabase.from('notas_importadas_itens').select('nota_id, valor_total, calcula_cmv').in('nota_id', lote),
+      idsNotasPeriodo
     )
     for (const it of itensCompraPeriodo) {
       if (it.calcula_cmv === false) continue
@@ -1673,6 +2037,91 @@ export async function buscarCurvaDeVendas(dataInicio, dataFim, loja = null, subg
     comparacaoParcialPorFiltro,
     cobertura
   })
+}
+
+// 14/08/2026 (5), pedido do Felipe: depois de notar 2 meses seguidos com `diferencaCustoPerdido`
+// bem negativa (-270k e -40k — compramos mais do que o Custo Teórico previa) e o mês seguinte
+// "bater certo", ele perguntou qual a melhor forma de olhar isso NO TEMPO pra saber se sobrou
+// saldo em estoque pra abater no mês seguinte. `buscarCurvaDeVendas` já calcula
+// `diferencaCustoPerdido` mas só pra 1 período isolado — sem série mensal e sem saldo ACUMULADO,
+// não dá pra distinguir "sobrou em estoque de verdade" de "foi perda/quebra não capturada pela
+// ficha" (a própria função rotula a diferença negativa como "custo perdido", mas isso é só um
+// rótulo/hipótese — o objetivo aqui é testar essa hipótese contra o estoque físico real).
+//
+// Estratégia: reaproveita as 2 fontes de verdade que já existem (nenhuma conta nova/duplicada) —
+// `buscarCurvaDeVendas` (Custo teórico × Compras, 1 chamada por mês do período) e `buscarCMVReal`
+// (estoque físico inicial/final valorizado em R$, somado entre os grupos pra virar 1 número só da
+// empresa). Pra cada mês da janela, calcula:
+//   - `variacaoTeoricaImplicita` = Compras − Custo teórico extrapolado (= −diferencaCustoPerdido).
+//     Positiva = o MODELO teórico diz que deveria ter sobrado estoque nesse mês; negativa = diz que
+//     consumimos mais do que compramos (bateu no estoque).
+//   - `variacaoEstoqueReal` = Estoque final − Estoque inicial (contagem física do mês, em R$).
+//   - As 2 são acumuladas (soma corrida) desde o início da janela — como as 2 partem de 0 no mesmo
+//     ponto, comparar as 2 linhas acumuladas responde a pergunta: se elas caminham juntas, o saldo
+//     "sobrando" no modelo teórico está mesmo virando estoque físico de verdade; se divergem, a
+//     diferença é o que o modelo teórico não está capturando (perda/quebra/furto/insumo sem ficha).
+//
+// ⚠️ `buscarCMVReal` não aceita filtro de loja/grupo (sempre empresa toda, mesma convenção do CMC
+// já usada em `buscarCurvaDeVendas`) — por isso, quando `loja`/`subgrupo` estiverem ativos, o
+// cruzamento com o estoque físico deixa de ser estritamente comparável (mesmo aviso
+// `comparacaoParcialPorFiltro` já usado lá, propagado aqui).
+export async function buscarSaldoTeoricoAcumulado({ mesFinal, anoFinal, meses = 6, loja = null, subgrupo = null } = {}) {
+  const janela = []
+  let m = mesFinal
+  let a = anoFinal
+  for (let i = 0; i < meses; i++) {
+    janela.unshift({ mes: m, ano: a })
+    m -= 1
+    if (m === 0) { m = 12; a -= 1 }
+  }
+
+  let diferencaAcumulada = 0
+  let variacaoTeoricaAcumulada = 0
+  let variacaoEstoqueRealAcumulada = 0
+  let algumaComparacaoParcial = false
+
+  const linhas = []
+  for (const { mes, ano } of janela) {
+    const inicioMes = `${ano}-${String(mes).padStart(2, '0')}-01`
+    const ultimoDia = new Date(ano, mes, 0).getDate()
+    const fimMes = `${ano}-${String(mes).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`
+
+    const [curva, real] = await Promise.all([
+      buscarCurvaDeVendas(inicioMes, fimMes, loja, subgrupo),
+      buscarCMVReal(mes, ano)
+    ])
+
+    const custoTeoricoExtrapolado = curva.custoTeoricoExtrapolado
+    const comprasPeriodo = curva.comprasPeriodo
+    const diferencaCustoPerdido = curva.diferencaCustoPerdido
+    if (curva.comparacaoParcialPorFiltro) algumaComparacaoParcial = true
+
+    const estoqueInicialReal = real.linhas.reduce((acc, l) => acc + l.estoqueInicial, 0)
+    const estoqueFinalReal = real.linhas.reduce((acc, l) => acc + l.estoqueFinal, 0)
+    const variacaoEstoqueReal = Math.round((estoqueFinalReal - estoqueInicialReal) * 100) / 100
+
+    const variacaoTeoricaImplicita = custoTeoricoExtrapolado != null
+      ? Math.round((comprasPeriodo - custoTeoricoExtrapolado) * 100) / 100
+      : null
+
+    diferencaAcumulada = Math.round((diferencaAcumulada + (diferencaCustoPerdido || 0)) * 100) / 100
+    variacaoTeoricaAcumulada = Math.round((variacaoTeoricaAcumulada + (variacaoTeoricaImplicita || 0)) * 100) / 100
+    variacaoEstoqueRealAcumulada = Math.round((variacaoEstoqueRealAcumulada + variacaoEstoqueReal) * 100) / 100
+
+    linhas.push({
+      mes, ano,
+      custoTeoricoExtrapolado, comprasPeriodo, diferencaCustoPerdido,
+      variacaoTeoricaImplicita, diferencaAcumulada, variacaoTeoricaAcumulada,
+      estoqueInicialReal: Math.round(estoqueInicialReal * 100) / 100,
+      estoqueFinalReal: Math.round(estoqueFinalReal * 100) / 100,
+      variacaoEstoqueReal, variacaoEstoqueRealAcumulada,
+      itensEstoqueSemCusto: real.totalItensSemCusto,
+      itensEstoqueOrfaos: real.totalItensOrfaos,
+      itensEstoqueTotal: real.totalItensContados
+    })
+  }
+
+  return { linhas, comparacaoParcialPorFiltro: algumaComparacaoParcial || !!(loja || subgrupo) }
 }
 
 export async function buscarConsumoTeorico(dataInicio, dataFim, loja = null, subgrupo = null) {
@@ -1709,14 +2158,21 @@ export async function buscarConsumoTeorico(dataInicio, dataFim, loja = null, sub
   const fichas = Array.from(fichaPorCodigo.values())
   if (!fichas.length) return Object.assign([], { totalVendas, totalCustoTeorico: 0, cmvMedio: null })
 
+  // 24/08/2026: batched em lotes de 300 (mesma correção do §22.1/§23 aplicada aqui de forma
+  // preventiva — `idsFichas` cresce com o nº de pratos distintos vendidos no período; período
+  // largo ou cardápio grande pode passar do limite de URL do PostgREST, mesmo sintoma do bug
+  // achado em `buscarResumoFichasTecnicas`).
   const idsFichas = fichas.map((f) => f.id)
-  const ingredientes = await buscarTodasAsLinhas(() =>
-    supabase.from('fichas_tecnicas_ingredientes').select('ficha_id, codigo_everest, nome, unidade_medida, quantidade_aplicada, quantidade_baixa_estoque, custo_unitario, custo_medio, tipo_baixa').in('ficha_id', idsFichas)
-  )
   const ingredientesPorFicha = new Map()
-  for (const ing of ingredientes) {
-    if (!ingredientesPorFicha.has(ing.ficha_id)) ingredientesPorFicha.set(ing.ficha_id, [])
-    ingredientesPorFicha.get(ing.ficha_id).push(ing)
+  for (let i = 0; i < idsFichas.length; i += 300) {
+    const lote = idsFichas.slice(i, i + 300)
+    const ingredientesDoLote = await buscarTodasAsLinhas(() =>
+      supabase.from('fichas_tecnicas_ingredientes').select('ficha_id, codigo_everest, nome, unidade_medida, quantidade_aplicada, quantidade_baixa_estoque, custo_unitario, custo_medio, tipo_baixa').in('ficha_id', lote)
+    )
+    for (const ing of ingredientesDoLote) {
+      if (!ingredientesPorFicha.has(ing.ficha_id)) ingredientesPorFicha.set(ing.ficha_id, [])
+      ingredientesPorFicha.get(ing.ficha_id).push(ing)
+    }
   }
 
   const consumoPorInsumo = new Map()
@@ -1801,21 +2257,31 @@ export async function buscarConsumoXVenda(dataInicio, dataFim, loja = null, subg
     acc.valorTotal += v.valorTotal
   }
 
+  // 24/08/2026: os 3 `.in()` abaixo (fichas por produto, ingredientes por ficha, unidade dos sem-
+  // ficha) agora vão em lotes de 300 — mesma correção preventiva aplicada em `buscarConsumoTeorico`
+  // e `buscarResumoFichasTecnicas` (§22.1/§23): `idsProdutosVendidos` cresce com o período/cardápio
+  // e pode passar do limite de URL do PostgREST.
   const idsProdutosVendidos = Array.from(vendidoPorProduto.keys())
-  const { data: fichas, error: e2 } = await supabase
-    .from('fichas_tecnicas')
-    .select('id, produto_id, quantidade_producao')
-    .in('produto_id', idsProdutosVendidos)
-  if (e2) throw e2
+  const fichas = []
+  for (let i = 0; i < idsProdutosVendidos.length; i += 300) {
+    const lote = idsProdutosVendidos.slice(i, i + 300)
+    const { data, error: e2 } = await supabase
+      .from('fichas_tecnicas')
+      .select('id, produto_id, quantidade_producao')
+      .in('produto_id', lote)
+    if (e2) throw e2
+    fichas.push(...(data || []))
+  }
 
-  const produtoIdsComFicha = new Set((fichas || []).map((f) => f.produto_id))
-  const idsFichas = (fichas || []).map((f) => f.id)
+  const produtoIdsComFicha = new Set(fichas.map((f) => f.produto_id))
+  const idsFichas = fichas.map((f) => f.id)
   const ingredientesPorFicha = new Map()
-  if (idsFichas.length) {
-    const ingredientes = await buscarTodasAsLinhas(() =>
-      supabase.from('fichas_tecnicas_ingredientes').select('ficha_id, codigo_everest, nome, unidade_medida, quantidade_aplicada, quantidade_baixa_estoque, custo_unitario, custo_medio, tipo_baixa').in('ficha_id', idsFichas)
+  for (let i = 0; i < idsFichas.length; i += 300) {
+    const lote = idsFichas.slice(i, i + 300)
+    const ingredientesDoLote = await buscarTodasAsLinhas(() =>
+      supabase.from('fichas_tecnicas_ingredientes').select('ficha_id, codigo_everest, nome, unidade_medida, quantidade_aplicada, quantidade_baixa_estoque, custo_unitario, custo_medio, tipo_baixa').in('ficha_id', lote)
     )
-    for (const ing of ingredientes) {
+    for (const ing of ingredientesDoLote) {
       if (!ingredientesPorFicha.has(ing.ficha_id)) ingredientesPorFicha.set(ing.ficha_id, [])
       ingredientesPorFicha.get(ing.ficha_id).push(ing)
     }
@@ -1824,8 +2290,9 @@ export async function buscarConsumoXVenda(dataInicio, dataFim, loja = null, subg
   // Unidade dos produtos sem ficha (pra exibir junto da quantidade — ex. "un", "kg").
   const idsSemFicha = idsProdutosVendidos.filter((id) => !produtoIdsComFicha.has(id))
   const unidadePorProduto = new Map()
-  if (idsSemFicha.length) {
-    const { data: prods } = await supabase.from('produtos').select('id, unidade_medida').in('id', idsSemFicha)
+  for (let i = 0; i < idsSemFicha.length; i += 300) {
+    const lote = idsSemFicha.slice(i, i + 300)
+    const { data: prods } = await supabase.from('produtos').select('id, unidade_medida').in('id', lote)
     for (const p of prods || []) unidadePorProduto.set(p.id, p.unidade_medida)
   }
 
@@ -1908,10 +2375,12 @@ export async function buscarCMVPonderadoPorItem(dataInicio, dataFim, loja = null
   if (!itensVendidos.length) return { linhas: [], totalVendas: 0, totalCustoTeorico: 0, cmvPonderadoGeral: null }
 
   const idsProdutosVendidos = [...new Set(itensVendidos.map((i) => i.produto_id).filter(Boolean))]
-  const { data: fichas } = idsProdutosVendidos.length
-    ? await supabase.from('fichas_tecnicas').select('produto_id, quantidade_producao, custo_producao').in('produto_id', idsProdutosVendidos)
-    : { data: [] }
+  const fichas = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('fichas_tecnicas').select('produto_id, nome, quantidade_producao, custo_producao').in('produto_id', lote),
+    idsProdutosVendidos
+  )
   const fichaPorProduto = new Map((fichas || []).map((f) => [f.produto_id, f]))
+  const fichasIncompletas = await fichasTravadasIncompletas()
 
   const porItem = new Map()
   for (const it of itensVendidos) {
@@ -1923,8 +2392,11 @@ export async function buscarCMVPonderadoPorItem(dataInicio, dataFim, loja = null
     g.quantidade += Number(it.quantidade) || 0
 
     const ficha = fichaPorProduto.get(it.produto_id)
-    if (ficha?.quantidade_producao && ficha?.custo_producao) {
-      const custoPorUnidade = Number(ficha.custo_producao) / Number(ficha.quantidade_producao)
+    // Trava de custo (ver `aplicarTravaDeCusto`) — efeito imediato, sem esperar reimportação.
+    const custoPorUnidade = ficha?.quantidade_producao
+      ? aplicarTravaDeCusto(ficha.nome, Number(ficha.custo_producao) / Number(ficha.quantidade_producao), fichasIncompletas.has(normalizarNomeFicha(ficha.nome)))
+      : 0
+    if (custoPorUnidade > 0) {
       g.custoTeorico += custoPorUnidade * (Number(it.quantidade) || 0)
     } else {
       g.semFicha = true
@@ -2254,10 +2726,22 @@ export async function buscarCMVReal(mes, ano) {
   const { data: notas } = await supabase.from('notas_importadas').select('id').gte('data_emissao', inicioMes).lte('data_emissao', fimMes)
   const idsNotas = (notas || []).map((n) => n.id)
   const comprasItensBrutos = idsNotas.length
-    ? await buscarTodasAsLinhas(() => supabase.from('notas_importadas_itens').select('produto_id, valor_total, valor_unitario, calcula_cmv').in('nota_id', idsNotas))
+    ? await buscarPorIdsEmLotes((lote) => supabase.from('notas_importadas_itens').select('produto_id, codigo_everest, valor_total, valor_unitario, calcula_cmv').in('nota_id', lote), idsNotas)
     : []
   // "Calcula CMV = NÃO" é o próprio Everest marcando item fora do custo (ex.: administrativo) — excluído do CMV Real.
-  const comprasItens = comprasItensBrutos.filter((c) => c.calcula_cmv !== false)
+  const comprasItensFiltrados = comprasItensBrutos.filter((c) => c.calcula_cmv !== false)
+  // 14/08/2026 (6): mesma FK órfã já corrigida em Curva de Vendas/Consumo Teórico/Margem por Prato
+  // (ver §5/§8), agora aplicada aqui — `notas_importadas_itens.produto_id` é um retrato de qual
+  // produto existia no momento do import; se `produtos` foi zerado/reimportado depois (comum na
+  // faxina de agosto), o id gravado fica órfão mesmo a compra estando certa. Resolve pelo
+  // `codigo_everest` (gravado por linha desde `migration_v9.sql`, ver `importarComprasEverest`) no
+  // cadastro ATUAL — com fallback pro `produto_id` gravado só nas linhas antigas, importadas antes
+  // da migração, que ainda não têm `codigo_everest` salvo.
+  const idAtualPorCodigoCompra = await resolverIdsPorCodigoEverest(comprasItensFiltrados.map((c) => c.codigo_everest))
+  const comprasItens = comprasItensFiltrados.map((c) => ({
+    ...c,
+    produtoIdAtual: (c.codigo_everest && idAtualPorCodigoCompra.get(c.codigo_everest)) || c.produto_id
+  }))
 
   // Vendas filtradas por data_movimento no ITEM (não pelo header do arquivo importado — ver nota
   // em buscarCurvaDeVendas), excluindo canceladas.
@@ -2269,22 +2753,77 @@ export async function buscarCMVReal(mes, ano) {
   const vendasItens = vendasItensBrutos.filter((v) => !v.cancelado)
 
   // Custo médio por produto — usado pra valorizar o estoque contado (que só tem quantidade)
-  const idsProdutos = [...new Set([...estoqueInicial.keys(), ...estoqueFinal.keys(), ...comprasItens.map((c) => c.produto_id)].filter(Boolean))]
-  const produtos = idsProdutos.length
-    ? (await supabase.from('produtos').select('id, grupo_everest').in('id', idsProdutos)).data
-    : []
+  // 14/08/2026 (5): essa consulta não era paginada em lotes (diferente de resolverIdsPorCodigoEverest/
+  // resolverFichasPorCodigoEverest, que já batiam nesse mesmo limite antes) e não checava `error` —
+  // com a empresa toda (sem filtro de loja/grupo, convenção já usada aqui) e vários meses somados
+  // (a nova aba "Saldo no tempo" chama isso 6x, 1 por mês), a lista de ids passou do limite de URL
+  // do PostgREST numa consulta única, o Supabase devolveu `data: null` com erro, e sem o `if (error)`
+  // isso ia direto pro `.map` de um valor null — exatamente o "Cannot read properties of null
+  // (reading 'map')" que o Felipe viu. Agora bate em lotes de 300 (mesmo tamanho já usado nos outros
+  // dois resolvers) e propaga erro de verdade em vez de deixar `data` virar null em silêncio.
+  const idsProdutos = [...new Set([...estoqueInicial.keys(), ...estoqueFinal.keys(), ...comprasItens.map((c) => c.produtoIdAtual)].filter(Boolean))]
+  const produtos = []
+  const TAMANHO_LOTE_PRODUTOS = 300
+  for (let i = 0; i < idsProdutos.length; i += TAMANHO_LOTE_PRODUTOS) {
+    const lote = idsProdutos.slice(i, i + TAMANHO_LOTE_PRODUTOS)
+    const { data, error } = await supabase.from('produtos').select('id, grupo_everest').in('id', lote)
+    if (error) throw error
+    produtos.push(...(data || []))
+  }
   const grupoPorProduto = new Map(produtos.map((p) => [p.id, p.grupo_everest || 'Sem grupo']))
+  // 14/08/2026 (6): quem existe HOJE em `produtos`, entre os ids referenciados pela contagem física
+  // — usado abaixo pra separar "sem custo por falta de compra recente" de "produto_id órfão"
+  // (contagem antiga referenciando um produto que não existe mais no cadastro atual, ver §8).
+  const idsProdutosExistentes = new Set(produtos.map((p) => p.id))
 
-  const custoPorProduto = new Map()
-  for (const c of comprasItens) {
-    if (!c.produto_id || !c.valor_unitario) continue
-    if (!custoPorProduto.has(c.produto_id)) custoPorProduto.set(c.produto_id, [])
-    custoPorProduto.get(c.produto_id).push(Number(c.valor_unitario))
+  // 17/08/2026: o custo usado pra valorizar o estoque CONTADO não pode ficar restrito só às
+  // compras DESSE mês (era assim antes — `custoPorProduto` só olhava `comprasItens`, já filtrado
+  // por inicioMes..fimMes). Um insumo sem compra no mês exato ficava sem preço e `valorizar()`
+  // pulava ele inteiro (`if (custo == null) continue`) — fazendo esse item "desaparecer" do
+  // estoque valorizado num mês e "voltar" com valor cheio no mês seguinte só porque a compra caiu
+  // num mês e não no outro. Isso é um ARTEFATO DE CÁLCULO, não uma variação real de estoque — e foi
+  // a causa real dos saltos de R$1M+ no "Saldo no tempo" que o Felipe reportou (a FK-órfã corrigida
+  // em 14/08 (6)/(7) era um problema de verdade, mas secundário; os saltos continuaram do mesmo
+  // jeito depois daquele fix, o que devia ter sido o sinal de que a causa principal era outra).
+  // Corrigido aplicando o MESMO princípio já usado em `buscarHistoricoDeFicha` (pedido original do
+  // Felipe lá: "o que importa é o mês que foi comprado o item... repete o último preço se não
+  // houver compra no mês") — preço = da compra MAIS RECENTE conhecida até o fim do mês analisado
+  // (`fimMes`), forward-fill, casado por `codigo_everest` (não por `produto_id`, mesma razão da
+  // FK-órfã de sempre). Sem limite inferior de data de propósito — histórico de compras dessa
+  // empresa ainda é curto; se um dia isso pesar, dá pra limitar a uns 12 meses pra trás.
+  const { data: notasAteFim, error: erroNotasAteFim } = await supabase
+    .from('notas_importadas').select('id, data_emissao').lte('data_emissao', fimMes)
+  if (erroNotasAteFim) throw erroNotasAteFim
+  const dataEmissaoPorNota = new Map((notasAteFim || []).map((n) => [n.id, n.data_emissao]))
+  const idsNotasAteFim = [...dataEmissaoPorNota.keys()]
+  // 19/08/2026: essa consulta não era paginada em lotes (o comentário acima até apostava que o
+  // histórico "ainda é curto" — não é mais) e o Felipe bateu exatamente no mesmo problema já
+  // documentado no comentário de 14/08/2026 (5) acima: `idsNotasAteFim` cresce com TODO o
+  // histórico de notas (sem limite inferior de data), passou do limite de URL do PostgREST numa
+  // consulta única, e voltou "Bad Request" ao clicar em Calcular na Exportação contábil. Corrigido
+  // batendo em lotes de 300 (mesmo tamanho já usado em `resolverIdsPorCodigoEverest` e no bloco de
+  // produtos acima) — mesmo princípio, outra consulta que cresce sem filtro de mês.
+  const comprasParaCustoBrutas = []
+  const TAMANHO_LOTE_NOTAS = 300
+  for (let i = 0; i < idsNotasAteFim.length; i += TAMANHO_LOTE_NOTAS) {
+    const loteNotas = idsNotasAteFim.slice(i, i + TAMANHO_LOTE_NOTAS)
+    const linhasLote = await buscarTodasAsLinhas(() =>
+      supabase.from('notas_importadas_itens').select('nota_id, produto_id, codigo_everest, valor_unitario, calcula_cmv').in('nota_id', loteNotas)
+    )
+    comprasParaCustoBrutas.push(...linhasLote)
+  }
+  const comprasParaCustoFiltradas = comprasParaCustoBrutas.filter((c) => c.calcula_cmv !== false && c.valor_unitario != null)
+  const idAtualPorCodigoCusto = await resolverIdsPorCodigoEverest(comprasParaCustoFiltradas.map((c) => c.codigo_everest))
+  const ultimaCompraPorProduto = new Map() // produtoIdAtual -> { data, preco } da compra mais recente conhecida
+  for (const c of comprasParaCustoFiltradas) {
+    const produtoIdAtual = (c.codigo_everest && idAtualPorCodigoCusto.get(c.codigo_everest)) || c.produto_id
+    const data = dataEmissaoPorNota.get(c.nota_id)
+    if (!produtoIdAtual || !data) continue
+    const atual = ultimaCompraPorProduto.get(produtoIdAtual)
+    if (!atual || data > atual.data) ultimaCompraPorProduto.set(produtoIdAtual, { data, preco: Number(c.valor_unitario) })
   }
   const custoMedioPorProduto = new Map()
-  for (const [produtoId, valores] of custoPorProduto) {
-    custoMedioPorProduto.set(produtoId, valores.reduce((a, b) => a + b, 0) / valores.length)
-  }
+  for (const [produtoId, { preco }] of ultimaCompraPorProduto) custoMedioPorProduto.set(produtoId, preco)
 
   function valorizar(mapaQuantidade) {
     const porGrupo = new Map()
@@ -2302,7 +2841,7 @@ export async function buscarCMVReal(mes, ano) {
 
   const comprasPorGrupo = new Map()
   for (const c of comprasItens) {
-    const grupo = grupoPorProduto.get(c.produto_id) || 'Sem grupo'
+    const grupo = grupoPorProduto.get(c.produtoIdAtual) || 'Sem grupo'
     comprasPorGrupo.set(grupo, (comprasPorGrupo.get(grupo) || 0) + (Number(c.valor_total) || 0))
   }
 
@@ -2331,11 +2870,360 @@ export async function buscarCMVReal(mes, ano) {
     }
   }).sort((a, b) => b.vendas - a.vendas)
 
-  const totalItensSemCusto = [...estoqueInicial.keys(), ...estoqueFinal.keys()]
-    .filter((id, i, arr) => arr.indexOf(id) === i)
-    .filter((id) => !custoMedioPorProduto.has(id)).length
+  const idsContadosUnicos = [...new Set([...estoqueInicial.keys(), ...estoqueFinal.keys()])]
+  const totalItensSemCusto = idsContadosUnicos.filter((id) => !custoMedioPorProduto.has(id)).length
+  // 14/08/2026 (6): dos itens contados sem custo, quantos são por um motivo mais grave — o
+  // `produto_id` gravado na contagem nem existe mais no cadastro atual de Produtos (órfão de
+  // verdade, ver §5/§8) — versus só não ter tido compra recente (produto existe, só falta preço
+  // fresco). `itens_contagem` nunca grava `codigo_everest` por linha (diferente de Vendas/Compras),
+  // então esse caso não tem como ser corrigido só resolvendo por código — se o produto foi
+  // zerado/reimportado depois da contagem, o vínculo daquela linha antiga se perde de vez. Contar
+  // e mostrar esse número (em vez de deixar ele escondido dentro de "sem custo médio" genérico) é o
+  // jeito de saber se vale a pena investigar mais ou não.
+  const totalItensOrfaos = idsContadosUnicos.filter((id) => !idsProdutosExistentes.has(id)).length
+  // 14/08/2026 (8): total de itens contados no mês (denominador) — junto com `totalItensOrfaos`,
+  // dá pra calcular um PERCENTUAL de itens órfãos por mês (não só a contagem absoluta), usado pela
+  // aba "Saldo no tempo" pra decidir/deixar o Felipe decidir quais meses marcar como pouco confiáveis.
+  const totalItensContados = idsContadosUnicos.length
 
-  return { linhas, totalItensSemCusto, mesAnterior, anoAnterior }
+  return { linhas, totalItensSemCusto, totalItensOrfaos, totalItensContados, mesAnterior, anoAnterior }
+}
+
+// ---------------------------------------------------------------------------
+// 18/08/2026 — Exportação contábil (Resumo A&B), pedido do Felipe: todo mês ele manda pro
+// contador uma planilha ("01 - CMV Inventário DOM") com Estoque Inicial/Compras/Estoque
+// Final/Custo Bruto/Vendas/%CMV, por 4 categorias (Alimentos, Bebidas Leves, Bebidas Alcoólicas,
+// Vinhos) — hoje montada manualmente, com dado que ele mesmo já disse não confiar 100%. Pedido:
+// "gerar algo parecido com os dados que temos na nossa base". A planilha original classifica cada
+// item numa dessas 4 categorias através de uma tabela de apoio (aba "Apoio" da planilha que ele
+// mandou como exemplo) — replicada abaixo como 2 mapas fixos: 1 pro subgrupo_everest (usado por
+// Estoque e Compras, que compartilham a mesma taxonomia de produto) e 1 pro grupo de venda (usado
+// só por Vendas, que tem sua própria taxonomia comercial, ex. "Aguas"/"Cervejas"/"Vinho Tinto" —
+// diferente do subgrupo do cadastro). Normalização (maiúsculo, sem acento, pontuação -> espaço)
+// porque a mesma taxonomia aparece com separador diferente em cada lugar (ex. "MP | SECOS" na
+// planilha do Felipe vs "MP - SECOS" no nosso `subgrupo_everest`, ver §22 do doc principal) —
+// comparar só a "essência" alfanumérica evita que isso quebre o casamento.
+//
+// Decisão do Felipe (18/08/2026): por agora, Créditos ao custo (Perda PDV, Perdas Almoxarifado,
+// Consumo Interno, Cortesias, Teste Cozinha, Alimentação Equipe) ficam DE FORA do cálculo — a
+// tela mostra Custo BRUTO (sem descontar nada disso), não "Custo Líquido". Quando/se ele quiser
+// que isso entre (ver §8 do doc principal — Perdas ainda não tem valorização em R$ nem separa
+// PDV de Almoxarifado), essa conta pode ser somada aqui como um desconto adicional.
+function normalizarChaveTipoAB(texto) {
+  return String(texto || '')
+    .toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim()
+}
+
+// subgrupo_everest -> Tipo A&B (null = fora do escopo Alimentos&Bebidas, ex. limpeza/descartável —
+// não é erro, a planilha original também só tem essas 4 categorias, o resto nunca entrava na conta).
+const TIPOS_AB_POR_SUBGRUPO_RAW = [
+  ['BEBIDAS QUENTES | CAFES E CHAS', 'Bebidas Leves'],
+  ['BEBIDAS SOFT | AGUAS', 'Bebidas Leves'],
+  ['BEBIDAS SOFT | REFRIGERANTES', 'Bebidas Leves'],
+  ['CERVEJAS', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | APERITIVOS', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | CACHACAS E AGUARDENTES', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | CONHAQUES', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | GINS', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | LICORES', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | RUMS', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | TEQUILAS', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | VERMUTES', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | VODKAS', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | WHISKIES', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | BRANDY', 'Bebidas Alcoólicas'],
+  ['DESTILADOS | SAQUES', 'Bebidas Alcoólicas'],
+  ['GELO', 'Bebidas Alcoólicas'],
+  ['HIGIENE E LIMPEZA', null],
+  ['ITEM PARADO EM ESTOQUE | FORA DE USO', 'Alimentos'],
+  ['ITEM PARADO EM ESTOQUE | SOBRA EVENTO', 'Alimentos'],
+  ['ITEM PARADO EM ESTOQUE | SOBRA MENU', 'Alimentos'],
+  ['ITEM PARADO EM ESTOQUE | TESTE', null],
+  ['MATERIAIS DESCARTAVEIS', null],
+  ['MC | CASA E DECORACAO', null],
+  ['MC | CONFEITARIA E PANIFICACAO', 'Alimentos'],
+  ['MC | PRODUTOS TERCEIROS AEB', null],
+  ['MP | CARNES BRANCAS', 'Alimentos'],
+  ['MP | CARNES VERMELHAS', 'Alimentos'],
+  ['MP | FRIOS E LATICINIOS', 'Alimentos'],
+  ['MP | HORTIFRUTIS', 'Alimentos'],
+  ['MP | MASSAS E PAES', 'Alimentos'],
+  ['MP | PEIXES E FRUTOS DO MAR', 'Alimentos'],
+  ['MP | SECOS', 'Alimentos'],
+  ['MP | SUCOS E POLPAS', 'Bebidas Leves'],
+  ['PRE PREPARO', 'Alimentos'],
+  ['PRE PREPARO BAR', 'Bebidas Leves'],
+  ['VINHOS BRANCOS', 'Vinhos'],
+  ['VINHOS CHAMPAGNES', 'Vinhos'],
+  ['VINHOS ESPUMANTES', 'Vinhos'],
+  ['VINHOS LARANJAS', 'Vinhos'],
+  ['VINHOS LICOROSOS', 'Vinhos'],
+  ['VINHOS ROSES', 'Vinhos'],
+  ['VINHOS SOBREMESA', 'Vinhos'],
+  ['VINHOS TINTOS', 'Vinhos'],
+  ['VINHOS FORTIFICADOS', 'Vinhos'],
+  ['TINTOS | RED', 'Vinhos']
+]
+const MAPA_TIPO_AB_POR_SUBGRUPO = new Map(TIPOS_AB_POR_SUBGRUPO_RAW.map(([k, v]) => [normalizarChaveTipoAB(k), v]))
+
+export function tipoContabilPorSubgrupo(subgrupoEverest) {
+  const chave = normalizarChaveTipoAB(subgrupoEverest)
+  if (!chave || !MAPA_TIPO_AB_POR_SUBGRUPO.has(chave)) return null
+  return MAPA_TIPO_AB_POR_SUBGRUPO.get(chave)
+}
+
+// grupo de venda (mesmo texto que já aparece na coluna "Grupo" da Curva de Vendas — ver
+// `subgrupoDeVenda`) -> Tipo A&B. Taxonomia comercial, diferente da taxonomia de cadastro acima.
+const TIPOS_AB_POR_GRUPO_VENDA_RAW = [
+  ['Acompanhamentos', 'Alimentos'], ['Aguardentes e Cachacas', 'Bebidas Alcoólicas'], ['Aguas', 'Bebidas Leves'],
+  ['Base para Drinks', 'Bebidas Alcoólicas'], ['BEBIDAS LEVES RB', 'Bebidas Leves'], ['Cafes', 'Bebidas Leves'],
+  ['Carnes', 'Alimentos'], ['Cervejas', 'Bebidas Alcoólicas'], ['Cervejas RB', 'Bebidas Alcoólicas'],
+  ['Condimentos / Ervas / Especiar', 'Alimentos'], ['Confeitaria Producao Interna', 'Alimentos'],
+  ['Destilados Geral', 'Bebidas Alcoólicas'], ['Drinks', 'Bebidas Alcoólicas'], ['Drinks RB', 'Bebidas Alcoólicas'],
+  ['Entradas', 'Alimentos'], ['Espumantes e Champagne', 'Vinhos'], ['Espumantes e Champagne RB', 'Vinhos'],
+  ['Frutas Frescas', 'Alimentos'], ['Guarnições', 'Alimentos'], ['Itens de Mercearia', 'Alimentos'],
+  ['MENU DALVA', 'Alimentos'], ['Outros', 'Alimentos'], ['Outros materiais', 'Alimentos'],
+  ['Padaria Producao Interna', 'Alimentos'], ['PORÇOES RB', 'Alimentos'], ['Principais', 'Alimentos'],
+  ['Principais Mercadinho', 'Alimentos'], ['Produtos de Terceiros', 'Alimentos'], ['Refrigerantes', 'Bebidas Leves'],
+  ['Salgados', 'Alimentos'], ['Sanduiches', 'Alimentos'], ['Sobremesa', 'Alimentos'], ['SOBREMESA RB', 'Alimentos'],
+  ['Sucos', 'Bebidas Leves'], ['Sucos RB', 'Bebidas Leves'], ['Take Away', 'Alimentos'],
+  ['Vinho Branco', 'Vinhos'], ['Vinho Branco RB', 'Vinhos'], ['Vinho Rose', 'Vinhos'], ['Vinho Tinto', 'Vinhos'],
+  ['Vinho Tinto RB', 'Vinhos'], ['Whiskies', 'Bebidas Alcoólicas'], ['Bebidas para Cozinha e Bar', 'Bebidas Alcoólicas'],
+  ['EVENTO RB', 'Alimentos'], ['Menu Eventos', 'Alimentos'], ['Paes', 'Alimentos'], ['Vinho Rose e Laranja RB', 'Vinhos'],
+  ['Assados', 'Alimentos'], ['Chas', 'Bebidas Leves'], ['Compotas e Geleias', 'Alimentos'], ['Especial do Dia', 'Alimentos'],
+  ['Grao e Cereais', 'Alimentos'], ['Menu Executivo', 'Alimentos'], ['Nossos Pratos', 'Alimentos'],
+  ['Páscoa Mercadinho', 'Alimentos'], ['Saladas', 'Alimentos'], ['Sobremesas', 'Alimentos'], ['Harmonização', 'Vinhos'],
+  ['Vinho Sobremesa e Fortificado', 'Vinhos'], ['Eventos Dom', 'Alimentos'], ['TINTOS | RED', 'Vinhos']
+]
+const MAPA_TIPO_AB_POR_GRUPO_VENDA = new Map(TIPOS_AB_POR_GRUPO_VENDA_RAW.map(([k, v]) => [normalizarChaveTipoAB(k), v]))
+
+export function tipoContabilPorGrupoVenda(grupoVenda) {
+  const chave = normalizarChaveTipoAB(subgrupoDeVenda(grupoVenda))
+  if (!chave || !MAPA_TIPO_AB_POR_GRUPO_VENDA.has(chave)) return null
+  return MAPA_TIPO_AB_POR_GRUPO_VENDA.get(chave)
+}
+
+export const TIPOS_AB_ORDEM = ['Alimentos', 'Bebidas Leves', 'Bebidas Alcoólicas', 'Vinhos']
+const SEM_CATEGORIA_AB = 'Fora de Alimentos & Bebidas'
+
+export async function buscarResumoContabil(mes, ano) {
+  let mesAnterior = mes - 1
+  let anoAnterior = ano
+  if (mesAnterior === 0) { mesAnterior = 12; anoAnterior = ano - 1 }
+
+  async function buscarEstoque(mesRef, anoRef) {
+    const { data: sessoes } = await supabase
+      .from('sessoes_contagem').select('id')
+      .eq('tipo', 'mensal').eq('mes_referencia', mesRef).eq('ano_referencia', anoRef).eq('status', 'finalizada')
+    const ids = (sessoes || []).map((s) => s.id)
+    if (!ids.length) return new Map()
+    const itens = await buscarTodasAsLinhas(() => supabase.from('itens_contagem').select('produto_id, quantidade').in('sessao_id', ids))
+    const mapa = new Map()
+    for (const it of itens) mapa.set(it.produto_id, (mapa.get(it.produto_id) || 0) + (Number(it.quantidade) || 0))
+    return mapa
+  }
+
+  const [estoqueInicial, estoqueFinal] = await Promise.all([
+    buscarEstoque(mesAnterior, anoAnterior),
+    buscarEstoque(mes, ano)
+  ])
+
+  const inicioMes = `${ano}-${String(mes).padStart(2, '0')}-01`
+  const ultimoDia = new Date(ano, mes, 0).getDate()
+  const fimMes = `${ano}-${String(mes).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`
+
+  const { data: notas } = await supabase.from('notas_importadas').select('id').gte('data_emissao', inicioMes).lte('data_emissao', fimMes)
+  const idsNotas = (notas || []).map((n) => n.id)
+  const comprasItensBrutos = idsNotas.length
+    ? await buscarPorIdsEmLotes((lote) => supabase.from('notas_importadas_itens').select('produto_id, codigo_everest, valor_total, calcula_cmv').in('nota_id', lote), idsNotas)
+    : []
+  const comprasItensFiltrados = comprasItensBrutos.filter((c) => c.calcula_cmv !== false)
+  const idAtualPorCodigoCompra = await resolverIdsPorCodigoEverest(comprasItensFiltrados.map((c) => c.codigo_everest))
+  const comprasItens = comprasItensFiltrados.map((c) => ({
+    ...c,
+    produtoIdAtual: (c.codigo_everest && idAtualPorCodigoCompra.get(c.codigo_everest)) || c.produto_id
+  }))
+
+  // Vendas filtradas por data_movimento no ITEM, excluindo canceladas — mesmo padrão de sempre.
+  const vendasItensBrutos = await buscarTodasAsLinhas(() =>
+    supabase.from('vendas_importadas_itens')
+      .select('grupo_venda, valor_total, valor_unitario, quantidade, cancelado')
+      .gte('data_movimento', inicioMes).lte('data_movimento', fimMes)
+  )
+  const vendasItens = vendasItensBrutos.filter((v) => !v.cancelado)
+
+  const idsProdutos = [...new Set([...estoqueInicial.keys(), ...estoqueFinal.keys(), ...comprasItens.map((c) => c.produtoIdAtual)].filter(Boolean))]
+  const produtos = []
+  const TAMANHO_LOTE_PRODUTOS = 300
+  for (let i = 0; i < idsProdutos.length; i += TAMANHO_LOTE_PRODUTOS) {
+    const lote = idsProdutos.slice(i, i + TAMANHO_LOTE_PRODUTOS)
+    const { data, error } = await supabase.from('produtos').select('id, subgrupo_everest').in('id', lote)
+    if (error) throw error
+    produtos.push(...(data || []))
+  }
+  const tipoPorProduto = new Map(produtos.map((p) => [p.id, tipoContabilPorSubgrupo(p.subgrupo_everest) || SEM_CATEGORIA_AB]))
+  const idsProdutosExistentes = new Set(produtos.map((p) => p.id))
+
+  // Custo médio por produto (forward-fill — mesmo princípio de `buscarCMVReal`, ver comentário lá:
+  // preço da compra mais recente conhecida até o fim do mês, casado por `codigo_everest`) pra
+  // valorizar o estoque contado (que só tem quantidade).
+  const { data: notasAteFim, error: erroNotasAteFim } = await supabase
+    .from('notas_importadas').select('id, data_emissao').lte('data_emissao', fimMes)
+  if (erroNotasAteFim) throw erroNotasAteFim
+  const dataEmissaoPorNota = new Map((notasAteFim || []).map((n) => [n.id, n.data_emissao]))
+  const idsNotasAteFim = [...dataEmissaoPorNota.keys()]
+  // 19/08/2026: essa consulta não era paginada em lotes (o comentário acima até apostava que o
+  // histórico "ainda é curto" — não é mais) e o Felipe bateu exatamente no mesmo problema já
+  // documentado no comentário de 14/08/2026 (5) acima: `idsNotasAteFim` cresce com TODO o
+  // histórico de notas (sem limite inferior de data), passou do limite de URL do PostgREST numa
+  // consulta única, e voltou "Bad Request" ao clicar em Calcular na Exportação contábil. Corrigido
+  // batendo em lotes de 300 (mesmo tamanho já usado em `resolverIdsPorCodigoEverest` e no bloco de
+  // produtos acima) — mesmo princípio, outra consulta que cresce sem filtro de mês.
+  const comprasParaCustoBrutas = []
+  const TAMANHO_LOTE_NOTAS = 300
+  for (let i = 0; i < idsNotasAteFim.length; i += TAMANHO_LOTE_NOTAS) {
+    const loteNotas = idsNotasAteFim.slice(i, i + TAMANHO_LOTE_NOTAS)
+    const linhasLote = await buscarTodasAsLinhas(() =>
+      supabase.from('notas_importadas_itens').select('nota_id, produto_id, codigo_everest, valor_unitario, calcula_cmv').in('nota_id', loteNotas)
+    )
+    comprasParaCustoBrutas.push(...linhasLote)
+  }
+  const comprasParaCustoFiltradas = comprasParaCustoBrutas.filter((c) => c.calcula_cmv !== false && c.valor_unitario != null)
+  const idAtualPorCodigoCusto = await resolverIdsPorCodigoEverest(comprasParaCustoFiltradas.map((c) => c.codigo_everest))
+  const ultimaCompraPorProduto = new Map()
+  for (const c of comprasParaCustoFiltradas) {
+    const produtoIdAtual = (c.codigo_everest && idAtualPorCodigoCusto.get(c.codigo_everest)) || c.produto_id
+    const data = dataEmissaoPorNota.get(c.nota_id)
+    if (!produtoIdAtual || !data) continue
+    const atual = ultimaCompraPorProduto.get(produtoIdAtual)
+    if (!atual || data > atual.data) ultimaCompraPorProduto.set(produtoIdAtual, { data, preco: Number(c.valor_unitario) })
+  }
+  const custoMedioPorProduto = new Map()
+  for (const [produtoId, { preco }] of ultimaCompraPorProduto) custoMedioPorProduto.set(produtoId, preco)
+
+  function valorizarPorTipo(mapaQuantidade) {
+    const porTipo = new Map()
+    for (const [produtoId, qtd] of mapaQuantidade) {
+      const custo = custoMedioPorProduto.get(produtoId)
+      if (custo == null) continue // sem compra recente pra saber o custo — não dá pra valorizar ainda
+      const tipo = tipoPorProduto.get(produtoId) || SEM_CATEGORIA_AB
+      porTipo.set(tipo, (porTipo.get(tipo) || 0) + qtd * custo)
+    }
+    return porTipo
+  }
+
+  const inicialPorTipo = valorizarPorTipo(estoqueInicial)
+  const finalPorTipo = valorizarPorTipo(estoqueFinal)
+
+  const comprasPorTipo = new Map()
+  for (const c of comprasItens) {
+    const tipo = tipoPorProduto.get(c.produtoIdAtual) || SEM_CATEGORIA_AB
+    comprasPorTipo.set(tipo, (comprasPorTipo.get(tipo) || 0) + (Number(c.valor_total) || 0))
+  }
+
+  const vendasPorTipo = new Map()
+  for (const v of vendasItens) {
+    const tipo = tipoContabilPorGrupoVenda(v.grupo_venda) || SEM_CATEGORIA_AB
+    // Valor bruto de venda (item + gorjeta de 13%) — mesma convenção já usada em todo o app, ver `valorVenda`.
+    vendasPorTipo.set(tipo, (vendasPorTipo.get(tipo) || 0) + valorVenda(v))
+  }
+
+  const todosOsTipos = [...TIPOS_AB_ORDEM, SEM_CATEGORIA_AB]
+  const linhas = todosOsTipos.map((tipo) => {
+    const inicial = inicialPorTipo.get(tipo) || 0
+    const compras = comprasPorTipo.get(tipo) || 0
+    const final = finalPorTipo.get(tipo) || 0
+    const vendas = vendasPorTipo.get(tipo) || 0
+    const custoBruto = inicial + compras - final
+    return {
+      tipo,
+      estoqueInicial: Math.round(inicial * 100) / 100,
+      compras: Math.round(compras * 100) / 100,
+      estoqueFinal: Math.round(final * 100) / 100,
+      custoBruto: Math.round(custoBruto * 100) / 100,
+      vendas: Math.round(vendas * 100) / 100,
+      percentualCusto: vendas > 0 ? Math.round((custoBruto / vendas) * 10000) / 100 : null
+    }
+  })
+
+  const linhasAB = linhas.filter((l) => l.tipo !== SEM_CATEGORIA_AB)
+  const linhaSemCategoria = linhas.find((l) => l.tipo === SEM_CATEGORIA_AB)
+  const total = linhasAB.reduce((acc, l) => ({
+    estoqueInicial: acc.estoqueInicial + l.estoqueInicial,
+    compras: acc.compras + l.compras,
+    estoqueFinal: acc.estoqueFinal + l.estoqueFinal,
+    custoBruto: acc.custoBruto + l.custoBruto,
+    vendas: acc.vendas + l.vendas
+  }), { estoqueInicial: 0, compras: 0, estoqueFinal: 0, custoBruto: 0, vendas: 0 })
+  for (const k of ['estoqueInicial', 'compras', 'estoqueFinal', 'custoBruto', 'vendas']) total[k] = Math.round(total[k] * 100) / 100
+  total.percentualCusto = total.vendas > 0 ? Math.round((total.custoBruto / total.vendas) * 10000) / 100 : null
+
+  const idsContadosUnicos = [...new Set([...estoqueInicial.keys(), ...estoqueFinal.keys()])]
+  const totalItensSemCusto = idsContadosUnicos.filter((id) => !custoMedioPorProduto.has(id)).length
+  const totalItensOrfaos = idsContadosUnicos.filter((id) => !idsProdutosExistentes.has(id)).length
+
+  return { linhas: linhasAB, linhaSemCategoria, total, totalItensSemCusto, totalItensOrfaos, mesAnterior, anoAnterior }
+}
+
+// ---------------------------------------------------------------------------
+// 18/08/2026 — Import de NCM por produto (pedido do Felipe, junto com a Exportação contábil acima:
+// "acho que a parte do ncm tbm"). A planilha que ele mandou como exemplo (aba "NCM" de um arquivo
+// maior, "Registro de Inventário") não tem cabeçalho de coluna nomeado — é um cabeçalho de empresa
+// (razão social/endereço/inscrição estadual) seguido direto das linhas de dado. Por isso, diferente
+// dos outros imports (que casam coluna por NOME), este reconhece a linha de dado pelo FORMATO:
+// alguma célula é um código de produto (dígitos, 4 a 8 caracteres — bate com codigo_everest) e
+// alguma célula bate com o padrão de NCM (dígitos com ponto, ex. "2008.20.10"). Linha que não bate
+// nesse formato é ignorada — e contada, nunca some em silêncio (mesmo princípio de sempre).
+const REGEX_NCM = /^\d{4}\.\d{2}(\.\d{2})?$/
+const REGEX_CODIGO_PRODUTO = /^\d{4,8}$/
+
+export async function importarNcm(linhasPlanilha, onProgresso) {
+  const porCodigo = new Map()
+  let linhasIgnoradas = 0
+  for (const linha of linhasPlanilha) {
+    if (!Array.isArray(linha) || linha.length === 0) continue
+    const celulas = linha.map((c) => (c == null ? '' : String(c).trim()))
+    const codigo = celulas.find((c) => REGEX_CODIGO_PRODUTO.test(c))
+    const ncm = celulas.find((c) => REGEX_NCM.test(c))
+    if (!codigo || !ncm) {
+      if (celulas.some((c) => c)) linhasIgnoradas++
+      continue
+    }
+    porCodigo.set(codigo, ncm)
+  }
+  if (porCodigo.size === 0) {
+    throw new Error('Não encontrei nenhuma linha no formato código + NCM nessa planilha.')
+  }
+
+  let atualizados = 0
+  let semCorrespondencia = 0
+  let feito = 0
+  const total = porCodigo.size
+  for (const [codigo, ncm] of porCodigo) {
+    const { data, error } = await supabase.from('produtos').update({ ncm }).eq('codigo_everest', codigo).select('id')
+    if (error) throw error
+    if (data && data.length > 0) atualizados++
+    else semCorrespondencia++
+    feito++
+    if (onProgresso && feito % 20 === 0) onProgresso({ feito, total })
+  }
+  if (onProgresso) onProgresso({ feito: total, total })
+
+  return { linhasLidas: linhasPlanilha.length, codigosEncontrados: porCodigo.size, atualizados, semCorrespondencia, linhasIgnoradas }
+}
+
+// Lista de produtos de venda (pratos/bebidas — a categoria que entra em nota fiscal) com o NCM já
+// importado — usada pela aba NCM da Exportação contábil. Ordenada por nome pra ficar fácil de
+// revisar/exportar. Não filtra por `ncm is not null` de propósito — quem ainda não tem NCM
+// cadastrado precisa aparecer também, pra ficar visível o que falta (nunca escondido em silêncio).
+export async function buscarProdutosParaNcm() {
+  const produtos = await buscarTodasAsLinhas(() =>
+    supabase.from('produtos').select('codigo_everest, nome, ncm, categoria').eq('categoria', 'venda').order('nome')
+  )
+  return produtos
 }
 
 export async function buscarCMVPonderado(mes, ano) {
@@ -2352,10 +3240,12 @@ export async function buscarCMVPonderado(mes, ano) {
   if (!itensVendidos.length) return { linhas: [], totalVendas: 0, totalCustoTeorico: 0 }
 
   const idsProdutosVendidos = [...new Set(itensVendidos.map((i) => i.produto_id).filter(Boolean))]
-  const { data: fichas } = idsProdutosVendidos.length
-    ? await supabase.from('fichas_tecnicas').select('produto_id, quantidade_producao, custo_producao').in('produto_id', idsProdutosVendidos)
-    : { data: [] }
+  const fichas = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('fichas_tecnicas').select('produto_id, nome, quantidade_producao, custo_producao').in('produto_id', lote),
+    idsProdutosVendidos
+  )
   const fichaPorProduto = new Map((fichas || []).map((f) => [f.produto_id, f]))
+  const fichasIncompletas = await fichasTravadasIncompletas()
 
   const porGrupo = new Map()
   for (const it of itensVendidos) {
@@ -2366,8 +3256,11 @@ export async function buscarCMVPonderado(mes, ano) {
     g.vendas += valorVenda(it)
 
     const ficha = fichaPorProduto.get(it.produto_id)
-    if (ficha?.quantidade_producao && ficha?.custo_producao) {
-      const custoPorUnidade = Number(ficha.custo_producao) / Number(ficha.quantidade_producao)
+    // Trava de custo (ver `aplicarTravaDeCusto`) — efeito imediato, sem esperar reimportação.
+    const custoPorUnidade = ficha?.quantidade_producao
+      ? aplicarTravaDeCusto(ficha.nome, Number(ficha.custo_producao) / Number(ficha.quantidade_producao), fichasIncompletas.has(normalizarNomeFicha(ficha.nome)))
+      : 0
+    if (custoPorUnidade > 0) {
       g.custoTeorico += custoPorUnidade * (Number(it.quantidade) || 0)
     } else {
       g.semFicha += 1
@@ -2391,6 +3284,19 @@ export async function buscarCMVPonderado(mes, ano) {
 
 export async function reabrirSessao(sessaoId) {
   const { error } = await supabase.from('sessoes_contagem').update({ status: 'em_andamento', finalizada_em: null }).eq('id', sessaoId)
+  if (error) throw error
+}
+
+// 09/09/2026 (§2 do combinado com o Felipe): o caminho inverso do `reabrirSessao` acima. Faltava
+// um jeito de tirar uma sessão travada em 'em_andamento' — esquecida, celular trocado, ninguém
+// nunca mais vai voltar nela — sem precisar excluir os itens já contados. `usuario_finalizou`
+// fica null de propósito: foi o ADMIN que forçou o fechamento, não a pessoa que estava contando,
+// e essa distinção já é lida em outro lugar (ver comentário de `finalizarSessao` em `lib/api.js`).
+export async function finalizarSessaoAdmin(sessaoId) {
+  const { error } = await supabase
+    .from('sessoes_contagem')
+    .update({ status: 'finalizada', finalizada_em: new Date().toISOString() })
+    .eq('id', sessaoId)
   if (error) throw error
 }
 
@@ -2619,6 +3525,95 @@ export async function listarUsuariosApp() {
   return data
 }
 
+// ---------- Perfis de acesso (§67, migration_v15) ----------
+// A tabela `perfis_acesso` é lida direto (não por function): ao contrário de `usuarios_app`, ela
+// não guarda nada sensível — é uma lista de nomes e permissões. O que ela NÃO deixa fazer pela
+// tela é virar desenvolvedor: `eh_desenvolvedor` é coluna e nunca é escrita aqui (só por SQL), de
+// propósito — se fosse marcável, quem abre esta tela podia se promover.
+export async function listarPerfisAcesso({ incluirInativos = true } = {}) {
+  let q = supabase.from('perfis_acesso').select('id, nome, descricao, permissoes, eh_desenvolvedor, protegido, ativo').order('nome')
+  if (!incluirInativos) q = q.eq('ativo', true)
+  const { data, error } = await q
+  if (error) {
+    // A v15 ainda não rodou: a tela avisa em vez de mostrar "confere sua internet" (o erro
+    // genérico que já mandou caçar problema no lugar errado — ver guarda-corpos do documento).
+    if (ehTabelaAusente(error)) return null
+    throw error
+  }
+  return (data || []).map((p) => ({ ...p, permissoes: Array.isArray(p.permissoes) ? p.permissoes : [] }))
+}
+
+export async function criarPerfilAcesso(nome, descricao, permissoes = []) {
+  const limpo = (nome || '').trim()
+  if (!limpo) throw new Error('O perfil precisa de um nome.')
+  const { error } = await supabase.from('perfis_acesso').insert({
+    nome: limpo, descricao: (descricao || '').trim() || null, permissoes
+  })
+  if (error) throw error
+}
+
+export async function atualizarPerfilAcesso(id, { nome, descricao, permissoes, ativo } = {}) {
+  const dados = {}
+  if (nome !== undefined) {
+    const limpo = (nome || '').trim()
+    if (!limpo) throw new Error('O perfil precisa de um nome.')
+    dados.nome = limpo
+  }
+  if (descricao !== undefined) dados.descricao = (descricao || '').trim() || null
+  if (permissoes !== undefined) dados.permissoes = permissoes
+  if (ativo !== undefined) dados.ativo = !!ativo
+  if (!Object.keys(dados).length) return
+  const { error } = await supabase.from('perfis_acesso').update(dados).eq('id', id)
+  if (error) throw error
+}
+
+// Vincula pessoa ↔ perfil, loja e PIN. Passa pela RPC (SECURITY DEFINER) porque é ela que valida o
+// PIN e que segura a trava do último desenvolvedor ativo — validação no banco, não na tela.
+export async function atualizarAcessoUsuario(id, { perfilId, unidadeId, limparUnidade, pin, ativo, nivel } = {}) {
+  const { error } = await supabase.rpc('atualizar_usuario_seguro', {
+    usuario_id: id,
+    novo_nivel: nivel ?? null,
+    novo_ativo: ativo ?? null,
+    novo_pin: pin ?? null,
+    novo_perfil_id: perfilId ?? null,
+    nova_unidade_id: unidadeId ?? null,
+    limpar_unidade: !!limparUnidade
+  })
+  if (!error) return
+  if (!ehFuncaoAusente(error)) throw error
+  // v15 ainda não rodada: cai na assinatura antiga (só nível e ativo). Trocar PIN, perfil e loja
+  // precisa da migração — dizer isso é melhor que falhar com a mensagem crua do PostgREST.
+  const { error: e2 } = await supabase.rpc('atualizar_usuario_seguro', {
+    usuario_id: id, novo_nivel: nivel ?? null, novo_ativo: ativo ?? null
+  })
+  if (e2) throw e2
+  if (pin || perfilId || unidadeId || limparUnidade) {
+    throw new Error('Nome e ativo foram salvos. PIN, perfil e loja exigem rodar a migration_v15.sql no Supabase.')
+  }
+}
+
+export async function criarUsuarioComPerfil({ nomeCompleto, pin, perfilId = null, unidadeId = null, nivelAcesso = 'operacao' }) {
+  const nome = (nomeCompleto || '').trim()
+  if (!nome) throw new Error('O nome não pode ficar vazio.')
+  const { error } = await supabase.rpc('criar_usuario_seguro', {
+    nome_completo_in: nome,
+    pin_in: pin,
+    nivel_in: nivelAcesso,
+    perfil_id_in: perfilId,
+    unidade_id_in: unidadeId
+  })
+  if (!error) return
+  if (!ehFuncaoAusente(error)) throw error
+  // v15 ainda não rodada: cria pela assinatura antiga (sem perfil/loja) em vez de não criar nada.
+  const { error: e2 } = await supabase.rpc('criar_usuario_seguro', {
+    nome_completo_in: nome, pin_in: pin, nivel_in: nivelAcesso
+  })
+  if (e2) throw e2
+  if (perfilId || unidadeId) {
+    throw new Error('Pessoa criada, mas sem perfil e loja: isso exige rodar a migration_v15.sql no Supabase.')
+  }
+}
+
 export async function criarUsuarioApp(nomeCompleto, pin, nivelAcesso = 'operacao') {
   const { error } = await supabase.rpc('criar_usuario_seguro', { nome_completo_in: nomeCompleto, pin_in: pin, nivel_in: nivelAcesso })
   if (error) throw error
@@ -2630,6 +3625,41 @@ export async function atualizarUsuarioApp(id, dados) {
     novo_nivel: dados.nivel_acesso ?? null,
     novo_ativo: dados.ativo ?? null
   })
+  if (error) throw error
+}
+
+// 27/08/2026 (§42), pedido do Felipe: editar a quantidade de um lançamento de contagem direto no
+// histórico. Erro de digitação na contagem hoje só se resolve apagando a sessão inteira e
+// recontando — desproporcional pra um dígito errado.
+//
+// A troca é registrada: `usuario` recebe quem corrigiu e `registrado_em` é atualizado, então o
+// histórico não passa a mentir dizendo que a pessoa original lançou aquele valor.
+export async function editarQuantidadeItemContagem(itemId, novaQuantidade, quemEditou = null) {
+  const q = Number(novaQuantidade)
+  if (!itemId) throw new Error('Lançamento não identificado.')
+  if (!Number.isFinite(q) || q < 0) throw new Error('Quantidade inválida.')
+  const dados = { quantidade: q }
+  if (quemEditou) dados.usuario = `${quemEditou} (corrigido)`
+  const { error } = await supabase.from('itens_contagem').update(dados).eq('id', itemId)
+  if (error) {
+    // `usuario` só existe depois da migration_v10 — se faltar, grava só a quantidade.
+    if (ehColunaAusente(error)) {
+      const { error: e2 } = await supabase.from('itens_contagem').update({ quantidade: q }).eq('id', itemId)
+      if (e2) throw e2
+      return
+    }
+    throw error
+  }
+}
+
+// 27/08/2026 (§42), pedido do Felipe: editar o nome do funcionário em Configuração → Usuários.
+// Não usa a RPC `atualizar_usuario_seguro` porque ela só aceita nível e ativo — incluir o nome ali
+// exigiria alterar a função no banco (nova migração). Como o nome não é campo sensível (o PIN
+// continua intocado, e é ele que a RPC protege), o update direto resolve sem migração.
+export async function editarNomeUsuarioApp(id, nomeCompleto) {
+  const nome = (nomeCompleto || '').trim()
+  if (!nome) throw new Error('O nome não pode ficar vazio.')
+  const { error } = await supabase.from('usuarios_app').update({ nome_completo: nome }).eq('id', id)
   if (error) throw error
 }
 
@@ -2688,13 +3718,24 @@ export async function registrarEtiquetaInterna(produtoId, codigoEverest) {
 }
 
 // ---------- Grupos de contagem parcial ----------
+// `ativo` (migration_v12.sql, 24/08/2026) — banco que ainda não rodou a migração não tem a coluna;
+// nesse caso o select com `ativo` falharia com 42703 (undefined_column). Pra não travar a tela,
+// tenta com `ativo` e cai pro select sem ela, assumindo `ativo: true` (comportamento de antes da
+// migração — todo grupo aparecia sempre).
 export async function listarGruposAdmin() {
-  const { data, error } = await supabase
+  let data, error
+  ;({ data, error } = await supabase
     .from('grupos_contagem')
-    .select('id, nome, grupos_contagem_itens(count)')
-    .order('nome')
+    .select('id, nome, ativo, grupos_contagem_itens(count)')
+    .order('nome'))
+  if (ehColunaAusente(error)) {
+    ;({ data, error } = await supabase
+      .from('grupos_contagem')
+      .select('id, nome, grupos_contagem_itens(count)')
+      .order('nome'))
+  }
   if (error) throw error
-  return data.map((g) => ({ id: g.id, nome: g.nome, totalItens: g.grupos_contagem_itens?.[0]?.count || 0 }))
+  return data.map((g) => ({ id: g.id, nome: g.nome, ativo: g.ativo !== false, totalItens: g.grupos_contagem_itens?.[0]?.count || 0 }))
 }
 
 export async function criarGrupo(nome) {
@@ -2703,7 +3744,39 @@ export async function criarGrupo(nome) {
   return data
 }
 
+// Renomear grupo (24/08/2026, pedido do Felipe) — só atualiza o nome, itens e status ativo/inativo
+// não são tocados aqui.
+export async function editarNomeGrupo(grupoId, nome) {
+  const { error } = await supabase.from('grupos_contagem').update({ nome }).eq('id', grupoId)
+  if (error) throw error
+}
+
+// Ativar/desativar grupo (24/08/2026, pedido do Felipe) — não apaga nada, só some dos filtros que
+// devem listar apenas grupos ativos (ex.: CMV Real x Teórico em CMVSemanal.jsx). Se o banco ainda
+// não tiver a coluna `ativo` (migração não rodou), o update falha com 42703 — deixa o erro subir
+// pra tela avisar o Felipe em vez de mascarar silenciosamente.
+export async function ativarDesativarGrupo(grupoId, ativo) {
+  const { error } = await supabase.from('grupos_contagem').update({ ativo }).eq('id', grupoId)
+  if (ehColunaAusente(error)) {
+    throw new Error('Ativar/desativar grupo precisa da migração v12. Rode `supabase/migration_v12.sql` no SQL Editor do Supabase e recarregue a página.')
+  }
+  if (error) throw error
+}
+
+// Trava de exclusão (24/08/2026, pedido do Felipe: "Se tiver contagem no grupo, não pode mais
+// apagar ele, só se apagar as contagens"). A FK `fk_sessoes_grupo` é ON DELETE SET NULL — sem essa
+// checagem, apagar o grupo simplesmente desvincularia as sessões existentes em silêncio, perdendo a
+// referência de qual grupo foi usado em cada contagem já feita. Em vez disso, bloqueia a exclusão
+// enquanto existir qualquer `sessoes_contagem` (finalizada ou não) apontando pro grupo.
 export async function deletarGrupo(grupoId) {
+  const { count, error: erroContagem } = await supabase
+    .from('sessoes_contagem')
+    .select('id', { count: 'exact', head: true })
+    .eq('grupo_id', grupoId)
+  if (erroContagem) throw erroContagem
+  if (count > 0) {
+    throw new Error(`Esse grupo tem ${count} contagem${count === 1 ? '' : 'ns'} registrada${count === 1 ? '' : 's'}. Apague as contagens desse grupo antes de excluí-lo.`)
+  }
   const { error } = await supabase.from('grupos_contagem').delete().eq('id', grupoId)
   if (error) throw error
 }
@@ -2734,35 +3807,50 @@ export async function removerItemGrupo(grupoId, produtoId) {
 // Detecta o erro do Postgrest quando uma coluna ainda não existe (ex.: migration_v4.sql
 // não rodou ainda no Supabase), pra dar fallback em vez de travar a tela inteira.
 // Código 42703 = undefined_column.
+// 28/08/2026: este helper existia em paralelo com `ehColunaAusente` (topo do arquivo) e era mais
+// fraco — não reconhecia `PGRST204`, o formato que o PostgREST usa em INSERT/UPDATE (§31). Dois
+// critérios diferentes pra mesma pergunta é exatamente como um deles fica pra trás. Agora delega,
+// mantendo só o extra de checar o nome da coluna quando informado.
 function colunaNaoExiste(error, nomeColuna) {
   if (!error) return false
-  if (error.code === '42703') return true
-  const msg = String(error.message || '')
-  return msg.includes(nomeColuna) && /column|coluna/i.test(msg)
+  if (ehColunaAusente(error)) {
+    if (!nomeColuna) return true
+    const msg = String(error.message || '')
+    // Mensagem sem o nome da coluna (acontece) não pode virar "não é essa" — na dúvida, aceita.
+    return !/["']([a-z_]+)["']/i.test(msg) || msg.includes(nomeColuna)
+  }
+  return false
 }
 
+// 17/08/2026: `usuario_finalizou` (migration_v10.sql) somado à coluna `data_referencia`
+// (migration_v4.sql) — em vez de 1 fallback booleano, agora tenta em camadas (mais completa →
+// mais básica), caindo pra próxima só quando a coluna de fato não existe (42703). Cobre bancos que
+// já rodaram só até a v4, só até a v9, ou já estão na v10 — nenhum trava a tela de Relatório.
 export async function listarSessoes(tipoFiltro = null) {
-  async function consultar(comDataReferencia) {
-    let query = supabase
-      .from('sessoes_contagem')
-      .select(
-        comDataReferencia
-          ? 'id, unidade_id, grupo_id, tipo, status, iniciada_em, finalizada_em, usuario, mes_referencia, ano_referencia, data_referencia, unidades(nome), grupos_contagem(nome)'
-          : 'id, unidade_id, grupo_id, tipo, status, iniciada_em, finalizada_em, usuario, mes_referencia, ano_referencia, unidades(nome), grupos_contagem(nome)'
-      )
-      .order('iniciada_em', { ascending: false })
-      .limit(200)
+  const colunasBase = 'id, unidade_id, grupo_id, tipo, status, iniciada_em, finalizada_em, usuario, mes_referencia, ano_referencia, unidades(nome), grupos_contagem(nome)'
+  // Ordem das tentativas: da consulta mais completa pra mais enxuta. Cada degrau cobre uma
+  // migração que pode não ter rodado ainda (v13 = turno, v10 = usuario_finalizou, v4 =
+  // data_referencia) — a tela nunca fica em branco só por causa disso.
+  const tentativas = [
+    `${colunasBase}, data_referencia, usuario_finalizou, turno`,
+    `${colunasBase}, data_referencia, usuario_finalizou`,
+    `${colunasBase}, data_referencia`,
+    colunasBase
+  ]
+  async function consultar(colunas) {
+    let query = supabase.from('sessoes_contagem').select(colunas).order('iniciada_em', { ascending: false }).limit(200)
     if (tipoFiltro) query = query.eq('tipo', tipoFiltro)
     return query
   }
-  let { data, error } = await consultar(true)
-  if (error && colunaNaoExiste(error, 'data_referencia')) {
-    // Ainda não rodou a migration_v4.sql — segue sem a coluna em vez de sumir com o histórico.
-    ;({ data, error } = await consultar(false))
-    if (!error) data = (data || []).map((s) => ({ ...s, data_referencia: null }))
+  let data, error
+  for (let i = 0; i < tentativas.length; i++) {
+    ;({ data, error } = await consultar(tentativas[i]))
+    if (!error || !colunaNaoExiste(error) || i === tentativas.length - 1) break
   }
   if (error) throw error
-  return data
+  // Garante as duas colunas novas sempre presentes (null quando a migração ainda não rodou),
+  // sem sobrescrever valor real quando a query completa funcionou.
+  return (data || []).map((s) => ({ data_referencia: null, usuario_finalizou: null, turno: null, ...s }))
 }
 
 export async function atualizarReferenciaSessao(sessaoId, mesReferencia, anoReferencia) {
@@ -2770,6 +3858,20 @@ export async function atualizarReferenciaSessao(sessaoId, mesReferencia, anoRefe
     .from('sessoes_contagem')
     .update({ mes_referencia: mesReferencia, ano_referencia: anoReferencia })
     .eq('id', sessaoId)
+  if (error) throw error
+}
+
+// Turno da sessão de perdas (migration_v13.sql). Mesmo padrão da data de referência: correção
+// depois do fato, no histórico. Erro de coluna ausente vira mensagem explicando a migração em vez
+// do texto cru do PostgREST.
+export async function atualizarTurnoSessao(sessaoId, turno) {
+  const { error } = await supabase
+    .from('sessoes_contagem')
+    .update({ turno: turno || null })
+    .eq('id', sessaoId)
+  if (error && ehColunaAusente(error)) {
+    throw new Error('Falta rodar a migration_v13.sql no Supabase (coluna `turno` em sessoes_contagem).')
+  }
   if (error) throw error
 }
 
@@ -2784,10 +3886,38 @@ export async function atualizarDataReferenciaSessao(sessaoId, dataReferencia) {
   if (error) throw error
 }
 
+// 17/08/2026: `usuario`/`registrado_em` por item (ver migration_v10.sql) passaram a ser
+// selecionados e devolvidos aqui — antes só existia o `usuario` da SESSÃO (quem abriu), sem jeito
+// de saber quem contou cada item individual quando mais de 1 pessoa participa da mesma sessão.
+// Pedido do Felipe, depois de encontrar uma contagem com o nome dele que ele não lembra de ter
+// feito.
 export async function buscarRelatorioSessao(sessaoId) {
+  // `motivo_perda`/`modo_perda` (migration_v13.sql) só são preenchidos em sessão tipo 'perdas' —
+  // vêm nulos em contagem/inventário e são ignorados pela tela. Estão no mesmo select porque o
+  // relatório é o mesmo componente pros dois casos.
+  let contadosPromise = buscarTodasAsLinhas(() =>
+    supabase.from('itens_contagem').select('id, produto_id, quantidade, usuario, registrado_em, motivo_perda, modo_perda, produtos(*)').eq('sessao_id', sessaoId)
+  ).catch(async (error) => {
+    // Migração pendente nesse Supabase (v10 = `usuario`; v13 = colunas de perda) — cai pro
+    // conjunto mínimo de colunas em vez de deixar o relatório inteiro em branco.
+    if (colunaNaoExiste(error, 'motivo_perda') || colunaNaoExiste(error, 'modo_perda')) {
+      return buscarTodasAsLinhas(() =>
+        supabase.from('itens_contagem').select('id, produto_id, quantidade, usuario, registrado_em, produtos(*)').eq('sessao_id', sessaoId)
+      ).catch((erroInterno) => {
+        if (colunaNaoExiste(erroInterno, 'usuario')) {
+          return buscarTodasAsLinhas(() => supabase.from('itens_contagem').select('id, produto_id, quantidade, produtos(*)').eq('sessao_id', sessaoId))
+        }
+        throw erroInterno
+      })
+    }
+    if (colunaNaoExiste(error, 'usuario')) {
+      return buscarTodasAsLinhas(() => supabase.from('itens_contagem').select('id, produto_id, quantidade, produtos(*)').eq('sessao_id', sessaoId))
+    }
+    throw error
+  })
   const [esperados, contados] = await Promise.all([
     buscarTodasAsLinhas(() => supabase.from('itens_esperados_sessao').select('produtos(*)').eq('sessao_id', sessaoId)),
-    buscarTodasAsLinhas(() => supabase.from('itens_contagem').select('produto_id, quantidade, produtos(*)').eq('sessao_id', sessaoId))
+    contadosPromise
   ])
 
   const contadoPorProduto = new Map(contados.map((c) => [c.produto_id, c]))
@@ -2796,24 +3926,39 @@ export async function buscarRelatorioSessao(sessaoId) {
   const linhas = esperados.map((e) => {
     const c = contadoPorProduto.get(e.produtos.id)
     return {
+      // 28/08/2026: `id` (da linha em itens_contagem) era buscado no select mas NUNCA chegava
+      // aqui. A tela usa `l.id` pra habilitar a edição da quantidade ("clique na quantidade para
+      // corrigir") — sem ele, `disabled={!l.id}` deixava o botão morto em toda linha, ou seja, a
+      // edição entregue em 26-28/08 nunca funcionou de fato. Item pendente (nunca contado) segue
+      // sem id, que é o correto: não há linha pra editar.
+      id: c ? c.id : null,
       produto_id: e.produtos.id,
       nome: e.produtos.nome,
       codigo_everest: e.produtos.codigo_everest,
       unidade_medida: e.produtos.unidade_medida,
       quantidade: c ? c.quantidade : null,
-      status: c ? 'contado' : 'pendente'
+      status: c ? 'contado' : 'pendente',
+      usuario: c ? c.usuario : null,
+      registrado_em: c ? c.registrado_em : null,
+      motivo_perda: c ? c.motivo_perda : null,
+      modo_perda: c ? c.modo_perda : null
     }
   })
 
   const extras = contados
     .filter((c) => !idsEsperados.has(c.produto_id))
     .map((c) => ({
+      id: c.id,
       produto_id: c.produto_id,
       nome: c.produtos.nome,
       codigo_everest: c.produtos.codigo_everest,
       unidade_medida: c.produtos.unidade_medida,
       quantidade: c.quantidade,
-      status: 'extra'
+      status: 'extra',
+      usuario: c.usuario,
+      registrado_em: c.registrado_em,
+      motivo_perda: c.motivo_perda,
+      modo_perda: c.modo_perda
     }))
 
   return [...linhas, ...extras]
@@ -3094,7 +4239,8 @@ export async function buscarDadosDashboard(tipoFiltro = 'mensal') {
 
 // ── Cardápio / Margem ──────────────────────────────────────────────────────
 // Painel de margem por prato: custo (da ficha) x venda real (das vendas do Everest).
-// Venda unitária = soma(valor_total) / soma(quantidade) no período. CMV% = custo / venda.
+// Venda unitária = valor unitário da venda MAIS RECENTE do prato no período (não mais a média
+// soma(valor)/soma(quantidade) — ver `vendasPorProduto`/achado do Felipe, 24/08/2026). CMV% = custo / venda.
 // Tendência = compara com a média móvel dos 3 meses anteriores (mesmo prato) — trocado de
 // "só o mês anterior" pra isso a pedido do Felipe: com só 1 mês de base, prato que não vendeu
 // no mês anterior (comum em canal novo, ex. Delivery) ficava sempre sem seta ("–"); com 3 meses
@@ -3127,22 +4273,67 @@ export async function buscarMargemCardapio(mes, ano) {
     // Filtra por data_movimento no item — ver nota em buscarCurvaDeVendas.
     const itens = await buscarTodasAsLinhas(() =>
       supabase.from('vendas_importadas_itens')
-        .select('codigo_everest, quantidade, valor_total, valor_unitario, cancelado')
+        .select('codigo_everest, quantidade, valor_total, valor_unitario, data_movimento, cancelado')
         .gte('data_movimento', ini).lte('data_movimento', fim)
     )
     const mapa = new Map()
     for (const it of itens) {
       if (!it.codigo_everest || it.cancelado) continue
-      const cur = mapa.get(it.codigo_everest) || { qtd: 0, valor: 0 }
+      const cur = mapa.get(it.codigo_everest) || { qtd: 0, valor: 0, ultimoValorUnitario: null, ultimaData: null }
       cur.qtd += Number(it.quantidade) || 0
       // 11/08/2026, pedido do Felipe: valor bruto de venda (item + gorjeta) — ver `valorVenda`.
       cur.valor += valorVenda(it)
+      // 24/08/2026, pedido do Felipe: a "venda unitária" usada pra comparar com o custo (CMV%) NÃO
+      // é mais soma(valor)÷soma(quantidade) — uma linha de venda com sujeira (preço ou quantidade
+      // fora do padrão, ex. ajuste/erro de digitação no PDV) distorcia essa média pra baixo e
+      // estourava o CMV% pra centenas/milhares de % (visto no card "CMV mais alto no período" —
+      // ex. 1.934,4%). Passa a usar o valor unitário da venda MAIS RECENTE do período (mesma
+      // cascata de `valorVenda`: valor_unitario primeiro, valor_total÷quantidade só se faltar).
+      // Isso limita o efeito de uma linha ruim a "só se ela for a mais recente", em vez de puxar a
+      // média de TODO o período pra baixo.
+      const puUnitLinha = it.valor_unitario != null
+        ? Number(it.valor_unitario) * FATOR_GORJETA
+        : (it.valor_total != null && it.quantidade ? (Number(it.valor_total) / Number(it.quantidade)) * FATOR_GORJETA : null)
+      if (puUnitLinha != null) {
+        // 25/08/2026: guarda TODOS os preços unitários do período, não só o mais recente. Motivo:
+        // usar cegamente "o mais recente" resolve a média suja, mas não resolve o caso da PRÓPRIA
+        // última venda ser a linha suja — e era isso que ainda estourava o CMV% de alguns pratos
+        // (média dos pratos em 1.586%). Com a lista completa dá pra validar o último valor contra a
+        // mediana do período (ver `precoRepresentativo`).
+        if (!cur.precos) cur.precos = []
+        cur.precos.push(puUnitLinha)
+      }
+      if (puUnitLinha != null && (!cur.ultimaData || String(it.data_movimento) >= String(cur.ultimaData))) {
+        cur.ultimaData = it.data_movimento
+        cur.ultimoValorUnitario = puUnitLinha
+      }
       mapa.set(it.codigo_everest, cur)
     }
     return mapa
   }
 
   const atual = await vendasPorProduto(mes, ano)
+
+  // 25/08/2026 — "valor de venda" (responde à pergunta do Felipe: "vai ficar entrando a média?").
+  // NÃO é média. A regra é: vale o preço da venda MAIS RECENTE do período — é isso que faz um
+  // aumento de preço aparecer no mesmo dia em que passa a valer. Só existe uma trava: se esse
+  // último valor estiver absurdamente fora da mediana do período (menos da metade ou mais do dobro),
+  // ele é tratado como linha suja de PDV e cai pra mediana, com o item marcado `vendaSuspeita` pra
+  // aparecer na tela. Um aumento real (mesmo de 50%) passa pela trava e é adotado na hora; só um
+  // valor descolado por ordem de grandeza — o que gerava CMV% de milhares por cento — é barrado.
+  function precoRepresentativo(v) {
+    if (!v) return { preco: null, suspeito: false }
+    const precos = (v.precos || []).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b)
+    if (!precos.length) return { preco: v.ultimoValorUnitario ?? null, suspeito: false }
+    const meio = Math.floor(precos.length / 2)
+    const mediana = precos.length % 2 ? precos[meio] : (precos[meio - 1] + precos[meio]) / 2
+    const ultimo = v.ultimoValorUnitario
+    if (ultimo == null || !(ultimo > 0)) return { preco: mediana, suspeito: false }
+    if (mediana > 0 && (ultimo < mediana * 0.5 || ultimo > mediana * 2)) {
+      return { preco: mediana, suspeito: true, ultimoDescartado: ultimo }
+    }
+    return { preco: ultimo, suspeito: false }
+  }
   // Janela de comparação = últimos 3 meses ANTES do mês escolhido (não inclui o mês atual).
   const janela = [1, 2, 3].map((n) => mesesAntes(mes, ano, n))
   const mapasJanela = await Promise.all(janela.map(({ m, a }) => vendasPorProduto(m, a)))
@@ -3161,16 +4352,18 @@ export async function buscarMargemCardapio(mes, ano) {
     if (pData) produtos.push(...pData)
   }
   const produtoPorCodigo = new Map(produtos.map((p) => [p.codigo_everest, p]))
+  const fichasIncompletas = await fichasTravadasIncompletas()
 
   function custoUnit(codigo) {
     const f = fichaPorCodigo.get(codigo)
-    if (f && Number(f.quantidade_producao) && f.custo_producao != null) return Number(f.custo_producao) / Number(f.quantidade_producao)
-    return null
+    if (!f || !Number(f.quantidade_producao) || f.custo_producao == null) return null
+    // Trava de custo (ver `aplicarTravaDeCusto`) — efeito imediato, sem esperar reimportação.
+    return aplicarTravaDeCusto(f.nome, Number(f.custo_producao) / Number(f.quantidade_producao), fichasIncompletas.has(normalizarNomeFicha(f.nome)))
   }
   function cmvDe(codigo, mapa) {
     const v = mapa.get(codigo); const c = custoUnit(codigo)
     if (!v || !v.qtd || c == null) return null
-    const vu = v.valor / v.qtd
+    const vu = precoRepresentativo(v).preco
     return vu ? (c / vu) * 100 : null
   }
   // Média móvel: só entra no cálculo o(s) mês(es) da janela em que o prato de fato vendeu — não
@@ -3185,7 +4378,8 @@ export async function buscarMargemCardapio(mes, ano) {
     const p = produtoPorCodigo.get(codigo)
     const v = atual.get(codigo)
     const c = custoUnit(codigo)
-    const vu = v && v.qtd ? v.valor / v.qtd : null
+    const rep = precoRepresentativo(v)
+    const vu = rep.preco
     const cmv = (c != null && vu) ? (c / vu) * 100 : null
     const cmvAnt = cmvMediaJanela(codigo)
     return {
@@ -3197,6 +4391,7 @@ export async function buscarMargemCardapio(mes, ano) {
       custo: c != null ? Math.round(c * 100) / 100 : null,
       venda: vu != null ? Math.round(vu * 100) / 100 : null,
       qtdVendida: Math.round((v?.qtd || 0) * 100) / 100,
+      vendaSuspeita: !!rep.suspeito,
       cmv: cmv != null ? Math.round(cmv * 10) / 10 : null,
       cmvAnterior: cmvAnt != null ? Math.round(cmvAnt * 10) / 10 : null,
       tendencia: (cmv != null && cmvAnt != null)
@@ -3205,16 +4400,38 @@ export async function buscarMargemCardapio(mes, ano) {
     }
   }).filter((l) => l.temFicha)
 
-  const cmvs = linhas.map((l) => l.cmv).filter((v) => v != null)
-  const media = cmvs.length ? cmvs.reduce((a, b) => a + b, 0) / cmvs.length : null
-  const limiteVermelho = media != null ? media * 1.3 : null // 30% acima da média dos pratos
+  // 25/08/2026 — a "média dos pratos" deixou de ser média aritmética simples. A simples tratava
+  // "DD PR Galinhada" (80% de CMV, centenas de vendas) e um prato com 1 venda de preço sujo
+  // (50.000% de CMV) com o MESMO peso, e por isso o número saía em 1.586,3% — sem relação com o
+  // negócio. Agora é PONDERADA pelo faturamento: custo total ÷ venda total do período (a mesma
+  // conta que o resto do app chama de "CMV ponderado"). Um prato com 1 venda pesa o que
+  // representa: quase nada. O limite do vermelho passa a sair da MEDIANA (não da média), que é
+  // insensível a outlier por construção — assim "acima da média" volta a significar
+  // "caro em relação aos outros pratos", não "acima de um número inflado por sujeira".
+  let custoPonderado = 0
+  let vendaPonderada = 0
+  for (const l of linhas) {
+    if (l.custo == null || l.venda == null || !l.qtdVendida) continue
+    custoPonderado += l.custo * l.qtdVendida
+    vendaPonderada += l.venda * l.qtdVendida
+  }
+  const media = vendaPonderada > 0 ? (custoPonderado / vendaPonderada) * 100 : null
+
+  const cmvsOrdenados = linhas.map((l) => l.cmv).filter((v) => v != null).sort((a, b) => a - b)
+  const meioCmv = Math.floor(cmvsOrdenados.length / 2)
+  const medianaCmv = cmvsOrdenados.length
+    ? (cmvsOrdenados.length % 2 ? cmvsOrdenados[meioCmv] : (cmvsOrdenados[meioCmv - 1] + cmvsOrdenados[meioCmv]) / 2)
+    : null
+  const limiteVermelho = medianaCmv != null ? medianaCmv * 1.3 : null // 30% acima da mediana dos pratos
   for (const l of linhas) l.acimaMedia = (limiteVermelho != null && l.cmv != null && l.cmv >= limiteVermelho)
 
   linhas.sort((a, b) => (b.cmv ?? -1) - (a.cmv ?? -1))
   return {
     linhas,
     media: media != null ? Math.round(media * 10) / 10 : null,
-    limiteVermelho: limiteVermelho != null ? Math.round(limiteVermelho * 10) / 10 : null
+    mediana: medianaCmv != null ? Math.round(medianaCmv * 10) / 10 : null,
+    limiteVermelho: limiteVermelho != null ? Math.round(limiteVermelho * 10) / 10 : null,
+    vendasSuspeitas: linhas.filter((l) => l.vendaSuspeita).length
   }
 }
 
@@ -3230,6 +4447,23 @@ export async function buscarMargemCardapio(mes, ano) {
 // composição "não fazer sentido". Corrigido casando por `codigo_everest` (chave de conflito do
 // upsert em `importarFichasTecnicas` — sempre atual, sempre única), a mesma identidade canônica do
 // produto (§1), em vez do id gravado na ficha.
+// 12/08/2026, 2ª correção pedida pelo Felipe no mesmo popup ("as FTs estão aparecendo muitos itens
+// e não parece estar certo o valor do kg e as quantidades"): esta função devolvia TODAS as linhas
+// de `fichas_tecnicas_ingredientes` sem aplicar o mesmo filtro "Tipo de Baixa = Consumo" que
+// `importarFichasTecnicas`/`buscarResumoFichasTecnicas`/`buscarConsumoTeorico` já usam — então o
+// popup misturava o ingrediente real da receita (ex. "PP ROTI DE BOI", uma redução já pronta) COM
+// as próprias linhas de base por trás dele que o Everest "achata" pra dentro da mesma ficha (ex.
+// "BOVINO MOCOTO", "BOVINO OSSO DE CANELA", "FRANGO PE" — os insumos crus daquela redução), dando a
+// impressão de itens demais e de quantidades que não faziam sentido pro prato. Agora usa o mesmo
+// `selecionarIngredientesDeConsumo` (cai pra lista inteira só se NENHUMA linha estiver marcada
+// "Consumo" — mesma rede de segurança das outras funções).
+// 12/08/2026 (2): `custo_linha` multiplicava `custo_unitario × quantidade` — revertido junto com o
+// fix de `custo_producao` em `importarFichasTecnicas`: `custo_unitario`/`custo_medio` numa linha de
+// Consumo já É a contribuição de custo daquele ingrediente pra 1 unidade do prato (o Everest já
+// aplica a quantidade internamente), não um preço por kg/lt que precise ser multiplicado de novo —
+// multiplicar de novo é o que fazia o popup mostrar valores errados. `quantidade`/`unidade_medida`
+// continuam voltando só pra informar quanto daquele ingrediente entra na receita (não entram na
+// conta de custo). Com isso a soma de `custo_linha` volta a bater com `ficha.custo_producao`.
 export async function buscarComposicaoFicha(codigoEverest) {
   if (!codigoEverest) return { ficha: null, ingredientes: [] }
   const { data: ficha } = await supabase
@@ -3240,10 +4474,10 @@ export async function buscarComposicaoFicha(codigoEverest) {
   if (!ficha) return { ficha: null, ingredientes: [] }
   const ings = await buscarTodasAsLinhas(() =>
     supabase.from('fichas_tecnicas_ingredientes')
-      .select('nome, codigo_everest, unidade_medida, quantidade_aplicada, quantidade_baixa_estoque, custo_medio, custo_unitario')
+      .select('nome, codigo_everest, unidade_medida, quantidade_aplicada, quantidade_baixa_estoque, custo_medio, custo_unitario, tipo_baixa')
       .eq('ficha_id', ficha.id)
   )
-  const ingredientes = ings.map((i) => {
+  const ingredientes = selecionarIngredientesDeConsumo(ings).map((i) => {
     const qtd = Number(i.quantidade_baixa_estoque) || Number(i.quantidade_aplicada) || 0
     const cu = Number(i.custo_unitario) || Number(i.custo_medio) || 0
     return {
@@ -3252,23 +4486,31 @@ export async function buscarComposicaoFicha(codigoEverest) {
       unidade_medida: i.unidade_medida,
       quantidade: qtd,
       custo_unitario: cu,
-      custo_linha: Math.round(cu * qtd * 100) / 100
+      custo_linha: Math.round(cu * 100) / 100
     }
-  })
+  }).sort((a, b) => b.custo_linha - a.custo_linha)
   return { ficha, ingredientes }
 }
 
 // Reverso: quais fichas usam um insumo (por código Everest). Ex.: filet mignon -> PP PICADINHO...
+// 12/08/2026: aplicado o mesmo filtro "Tipo de Baixa = Consumo" das demais funções (ver
+// `ehLinhaDeConsumo`/`selecionarIngredientesDeConsumo`) — sem ele, uma ficha podia aparecer como
+// "usa esse insumo" só por causa da linha de achatamento/desmontagem redundante do Everest, mesmo
+// quando esse insumo não entra de fato no custo daquela ficha.
 export async function buscarFichasQueUsamInsumo(codigoEverest) {
   if (!codigoEverest) return []
-  const ings = await buscarTodasAsLinhas(() =>
+  const todasAsLinhas = await buscarTodasAsLinhas(() =>
     supabase.from('fichas_tecnicas_ingredientes')
-      .select('ficha_id, quantidade_aplicada, unidade_medida')
+      .select('ficha_id, quantidade_aplicada, unidade_medida, tipo_baixa')
       .eq('codigo_everest', codigoEverest)
   )
+  const ings = selecionarIngredientesDeConsumo(todasAsLinhas)
   const ids = [...new Set(ings.map((i) => i.ficha_id))]
   if (!ids.length) return []
-  const { data: fichas } = await supabase.from('fichas_tecnicas').select('id, nome, codigo_everest').in('id', ids)
+  const fichas = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('fichas_tecnicas').select('id, nome, codigo_everest').in('id', lote),
+    ids
+  )
   const porFicha = new Map((fichas || []).map((f) => [f.id, f]))
   return ings.map((i) => ({
     ficha_id: i.ficha_id,
@@ -3290,6 +4532,36 @@ export async function buscarCoberturaDados() {
     buscarTodasAsLinhas(() => supabase.from('notas_importadas').select('fantasia, data_emissao')),
     supabase.from('fichas_tecnicas').select('atualizado_em')
   ])
+
+  // 28/08/2026 (§48), pedido do Felipe: mostrar QUANDO cada base foi importada pela última vez.
+  // Sem isso, uma base desatualizada (ou uma reimportação que não pegou) fica indistinguível de
+  // uma base correta — foi exatamente o que atrasou a investigação do filet mignon: eu supunha
+  // que as fichas do app eram as mesmas dos arquivos, e não eram.
+  //
+  // Cada tabela usa a coluna de tempo que já tem, e o rótulo diz exatamente o que ela significa —
+  // "produtos" é o único caso onde só existe `created_at`, ou seja, marca o último produto NOVO
+  // criado, não a última reimportação (upsert de produto existente não mexe nesse campo).
+  const ultimoDe = async (tabela, coluna, extras = '') => {
+    const { data } = await supabase
+      .from(tabela)
+      .select(`${coluna}${extras ? ', ' + extras : ''}`)
+      .order(coluna, { ascending: false })
+      .limit(1)
+    const linha = (data || [])[0]
+    return linha ? { quando: linha[coluna], arquivo: linha.nome_arquivo || null } : null
+  }
+  const [impVendas, impCompras, impFichas, impProdutos] = await Promise.all([
+    ultimoDe('vendas_importadas', 'importado_em', 'nome_arquivo'),
+    ultimoDe('notas_importadas', 'importado_em', 'nome_arquivo'),
+    ultimoDe('fichas_tecnicas', 'atualizado_em'),
+    ultimoDe('produtos', 'created_at')
+  ])
+  const ultimasImportacoes = [
+    { base: 'Vendas', ...(impVendas || {}), observacao: 'último arquivo de vendas importado' },
+    { base: 'Compras', ...(impCompras || {}), observacao: 'último relatório "Compras no Período" importado' },
+    { base: 'Fichas técnicas', ...(impFichas || {}), observacao: 'ficha atualizada mais recentemente' },
+    { base: 'Produtos', ...(impProdutos || {}), observacao: 'último produto NOVO criado — reimportar produto já existente não muda esta data' }
+  ]
   const nomeUnidade = new Map((uRes.data || []).map((u) => [u.id, u.nome]))
   const cnpjUnidade = new Map((uRes.data || []).map((u) => [u.id, u.cnpj]))
   const CNPJ_DOM = '03306282000148'
@@ -3355,7 +4627,7 @@ export async function buscarCoberturaDados() {
     atualizadoEm: fichasArr.reduce((max, f) => (f.atualizado_em && (!max || f.atualizado_em > max)) ? f.atualizado_em : max, null)
   }
 
-  return { inventario, semanal, vendasCobertura, comprasCobertura, fichas }
+  return { inventario, semanal, vendasCobertura, comprasCobertura, fichas, ultimasImportacoes }
 }
 
 // ── Painel (resumo em widgets) ─────────────────────────────────────────────
@@ -3439,7 +4711,10 @@ export async function buscarPainelResumo(dataInicio, dataFim) {
   const comp = { DOM: 0, Dalva: 0 }
   const comprasItens = []
   if (nIds.length) {
-    const itens = await buscarTodasAsLinhas(() => supabase.from('notas_importadas_itens').select('nota_id, produto_id, valor_total, valor_unitario, calcula_cmv').in('nota_id', nIds))
+    const itens = await buscarPorIdsEmLotes(
+      (lote) => supabase.from('notas_importadas_itens').select('nota_id, produto_id, valor_total, valor_unitario, calcula_cmv').in('nota_id', lote),
+      nIds
+    )
     for (const it of itens) {
       if (it.calcula_cmv === false) continue
       const bloco = empPorNota.get(it.nota_id) || 'Dalva'
@@ -3494,9 +4769,10 @@ export async function buscarPainelResumo(dataInicio, dataFim) {
   const idsProdutosCmv = [...new Set([
     ...estoqueInicialInfo.mapa.keys(), ...estoqueFinalInfo.mapa.keys(), ...comprasItens.map((c) => c.produto_id)
   ].filter(Boolean))]
-  const { data: produtosCmv } = idsProdutosCmv.length
-    ? await supabase.from('produtos').select('id, grupo_everest').in('id', idsProdutosCmv)
-    : { data: [] }
+  const produtosCmv = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('produtos').select('id, grupo_everest').in('id', lote),
+    idsProdutosCmv
+  )
   const grupoPorProduto = new Map((produtosCmv || []).map((p) => [p.id, p.grupo_everest || 'Sem grupo']))
 
   const custoPorProduto = new Map()
@@ -3677,6 +4953,95 @@ export async function buscarTendenciaPainel(mesesQtd = 6) {
   return resultados
 }
 
+// Média móvel de faturamento (13/08/2026, pedido do Felipe: "gráfico de média móvel de
+// faturamento... só um seletor por loja"). Diferente de `buscarTendenciaPainel` (1 ponto por MÊS,
+// últimos 6 meses) — aqui é 1 ponto por DIA, pra dar base pra uma média móvel de verdade (a
+// oscilação dia-a-dia de um restaurante é grande: fim de semana x meio de semana, por isso a MM7 é
+// mais útil que o dado bruto). `loja` é o único filtro (nenhum período/grupo — pedido explícito de
+// deixar só o seletor de loja) — null/'' = todas as lojas somadas. Preenche dias sem venda com 0
+// (nunca pula um dia) pra não distorcer a média móvel com buracos.
+export async function buscarFaturamentoDiario(loja = null, dias = 90) {
+  const hoje = new Date()
+  const cutoff = new Date(hoje)
+  cutoff.setDate(cutoff.getDate() - (dias - 1))
+  const cutoffIso = cutoff.toISOString().slice(0, 10)
+
+  const itens = await buscarTodasAsLinhas(() =>
+    supabase.from('vendas_importadas_itens')
+      .select('data_movimento, quantidade, valor_total, valor_unitario, fantasia, grupo_venda, cancelado')
+      .gte('data_movimento', cutoffIso)
+  )
+
+  const porDia = new Map() // 'YYYY-MM-DD' -> faturamento
+  for (const it of itens) {
+    if (it.cancelado) continue
+    if (loja && lojaDeVenda(it.fantasia, it.grupo_venda) !== loja) continue
+    const dia = String(it.data_movimento).slice(0, 10)
+    porDia.set(dia, (porDia.get(dia) || 0) + valorVenda(it))
+  }
+
+  // Preenche todos os dias do intervalo, mesmo sem venda — buraco no meio da série quebraria a
+  // média móvel (ex.: um dia de sistema fora do ar não pode "desaparecer" da conta).
+  const serie = []
+  for (let i = 0; i < dias; i++) {
+    const d = new Date(cutoff)
+    d.setDate(d.getDate() + i)
+    const iso = d.toISOString().slice(0, 10)
+    serie.push({ data: iso, faturamento: Math.round((porDia.get(iso) || 0) * 100) / 100 })
+  }
+  return serie
+}
+
+// Widget da barra lateral (13/08/2026, pedido do Felipe: "fat total dia anterior por loja, seta
+// pra saber se estamos indo bem ou mal por loja"). Compara o faturamento de ONTEM de cada loja com
+// a MÉDIA DIÁRIA dos 7 dias ANTES de ontem — de propósito NÃO inclui o próprio ontem no cálculo da
+// média, senão a média "absorve" o dia que está sendo comparado contra ela e a variação sempre fica
+// perto de zero (comparar um número com uma média que já contém esse número amortece o sinal).
+// Preenche dia sem venda com 0, mesmo princípio de `buscarFaturamentoDiario`.
+export async function buscarComparativoFaturamentoOntem() {
+  const hoje = new Date()
+  const ontem = new Date(hoje)
+  ontem.setDate(ontem.getDate() - 1)
+  const inicioBaseline = new Date(ontem)
+  inicioBaseline.setDate(inicioBaseline.getDate() - 7) // 7 dias antes de ontem
+  const inicioIso = inicioBaseline.toISOString().slice(0, 10)
+  const ontemIso = ontem.toISOString().slice(0, 10)
+
+  const itens = await buscarTodasAsLinhas(() =>
+    supabase.from('vendas_importadas_itens')
+      .select('data_movimento, quantidade, valor_total, valor_unitario, fantasia, grupo_venda, cancelado')
+      .gte('data_movimento', inicioIso).lte('data_movimento', ontemIso)
+  )
+
+  const zeroPorLoja = () => ({ DD: 0, DOM: 0, RB: 0, EV: 0, MC: 0, DL: 0 })
+  const porDiaLoja = new Map() // 'YYYY-MM-DD' -> { DD, DOM, RB, EV, MC, DL }
+  for (const it of itens) {
+    if (it.cancelado) continue
+    const dia = String(it.data_movimento).slice(0, 10)
+    const loja = lojaDeVenda(it.fantasia, it.grupo_venda)
+    if (!porDiaLoja.has(dia)) porDiaLoja.set(dia, zeroPorLoja())
+    porDiaLoja.get(dia)[loja] += valorVenda(it)
+  }
+
+  const diasBaseline = []
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(inicioBaseline)
+    d.setDate(d.getDate() + i)
+    diasBaseline.push(d.toISOString().slice(0, 10))
+  }
+
+  const valoresOntem = porDiaLoja.get(ontemIso) || zeroPorLoja()
+  const porLoja = {}
+  for (const loja of LOJAS_VALIDAS) {
+    const somaBaseline = diasBaseline.reduce((acc, dia) => acc + (porDiaLoja.get(dia)?.[loja] || 0), 0)
+    const baseline = somaBaseline / diasBaseline.length
+    const valorOntem = valoresOntem[loja] || 0
+    const variacaoPercentual = baseline > 0 ? ((valorOntem - baseline) / baseline) * 100 : (valorOntem > 0 ? 100 : 0)
+    porLoja[loja] = { ontem: valorOntem, baseline, variacaoPercentual }
+  }
+  return { data: ontemIso, porLoja }
+}
+
 // ── Fatores de correção (porcionado -> insumo cru) ─────────────────────────
 // Busca ampla: inclui PRODUTO ACABADO (os PP/porcionados costumam ser acabados).
 export async function buscarProdutosParaFator(termo) {
@@ -3688,6 +5053,38 @@ export async function buscarProdutosParaFator(termo) {
   const { data, error } = await q.order('nome').limit(30)
   if (error) throw error
   return data || []
+}
+
+// 26/08/2026 (§39) — CRITÉRIO DE "INSUMO BASE" REFEITO, a pedido do Felipe.
+//
+// A 1ª versão (§38) usava só "não tem ficha própria". Não funcionou: PP e prato SEM ficha cadastrada
+// no Everest — e existem 111 deles só entre os "PP " (§19.1) — passavam pelo filtro como se fossem
+// insumo base. Era um critério por AUSÊNCIA de dado, e ausência de dado não prova nada.
+//
+// O critério agora é o que o Felipe sugeriu, e é empírico: **insumo base é o que aparece em
+// COMPRAS**. Se a casa compra, é matéria-prima entrando; pré-preparo e prato nunca são comprados,
+// são produzidos. Isso não depende do cadastro de ficha estar completo.
+//
+// Os dois critérios se somam: precisa ter compra registrada E não ter ficha própria. O segundo
+// pega o caso raro do item que é comprado pronto e ainda assim tem ficha cadastrada (ex.: molho
+// comprado que alguém também cadastrou como receita) — aí não é insumo base para esta análise.
+export async function buscarProdutosInsumoBase(termo) {
+  const encontrados = await buscarProdutosParaFator(termo)
+  if (!encontrados.length) return []
+
+  const { codigosComFicha } = await carregarFichasParaConversao()
+  const codigos = encontrados.map((p) => p.codigo_everest).filter(Boolean)
+
+  // Quais desses códigos realmente aparecem em compras.
+  const linhasCompra = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('notas_importadas_itens').select('codigo_everest').in('codigo_everest', lote),
+    codigos
+  )
+  const comprados = new Set((linhasCompra || []).map((l) => l.codigo_everest).filter(Boolean))
+
+  return encontrados
+    .filter((p) => comprados.has(p.codigo_everest) && !codigosComFicha.has(p.codigo_everest))
+    .map((p) => ({ ...p, insumoBase: true }))
 }
 
 export async function listarFatoresCorrecao() {
@@ -3732,10 +5129,16 @@ export async function removerFatorCorrecao(id) {
 // pro insumo em natura de origem. Teórico = o que as vendas do mesmo intervalo deveriam ter
 // consumido, segundo a ficha técnica de cada prato vendido — usando o MESMO motor direto no
 // código do prato (a ficha do Everest já vem achatada com a cadeia inteira, não só o 1º nível).
+// 14/08/2026 (3), pedido do Felipe (aba "Contagem" com memória de cálculo, igual à aba "Vendas" do
+// popup de detalhe): além da quantidade, também devolve `fatorCorrecao`/`fatorOrigem`/
+// `preparoIntermediario` de cada folha, pra dar pra mostrar a mesma auditoria já feita do lado das
+// vendas também do lado da contagem (estoque inicial/final). `fatorOrigem: 'direto'` quando o
+// produto contado JÁ É o insumo em natura (categoria 'insumo') — não passou por nenhuma ficha, não
+// tem "fator" pra auditar, é só a quantidade contada mesmo.
 async function converterParaInsumos(codigoEverest, categoria, nome, unidade, quantidade) {
-  if (!quantidade) return { insumos: [], gap: false }
+  if (!quantidade) return { insumos: [], gap: false, motivo: 'quantidade zero' }
   if (categoria === 'insumo') {
-    return { insumos: [{ codigoEverest, nome, unidade, quantidade }], gap: false }
+    return { insumos: [{ codigoEverest, nome, unidade, quantidade, quantidadeLiquida: quantidade, fatorCorrecao: null, fatorOrigem: 'direto', preparoIntermediario: null }], gap: false }
   }
   const folhas = await buscarInsumosEmNatura(codigoEverest)
   if (folhas === null) {
@@ -3745,15 +5148,39 @@ async function converterParaInsumos(codigoEverest, categoria, nome, unidade, qua
     // se aplicar a esse item. Mesma regra já usada no Consolidado da contagem
     // (buscarConsolidadoPorData) — antes dessa correção, qualquer compra de descartável,
     // material de limpeza ou vinho no período virava "gap" sem motivo, poluindo a lista.
-    return { insumos: [], gap: categoria === 'pre_preparo' }
+    //
+    // 25/08/2026 (§32): passa a devolver `motivo` SEMPRE. Antes, item sem ficha e sem categoria
+    // 'pre_preparo' voltava `{insumos: [], gap: false}` e sumia do cálculo sem deixar rastro —
+    // inclusive item com `categoria` VAZIA (produto não classificado), que é o caso mais fácil de
+    // acontecer e o mais difícil de perceber. Agora todo descarte tem motivo registrável.
+    return {
+      insumos: [],
+      gap: categoria === 'pre_preparo',
+      motivo: categoria === 'pre_preparo'
+        ? 'pré-preparo sem ficha técnica cadastrada'
+        : (!categoria
+            ? 'produto sem categoria definida no cadastro e sem ficha técnica'
+            : `categoria "${categoria}" não se converte em insumo (sem ficha técnica)`)
+    }
   }
   return {
-    insumos: folhas.map((f) => ({ codigoEverest: f.codigoEverest, nome: f.nome, unidade: f.unidade, quantidade: f.quantidadePorUnidade * quantidade })),
+    insumos: folhas.map((f) => ({
+      codigoEverest: f.codigoEverest, nome: f.nome, unidade: f.unidade, quantidade: f.quantidadePorUnidade * quantidade,
+      quantidadeLiquida: f.quantidadeLiquidaPorUnidade * quantidade,
+      fatorCorrecao: f.fatorCorrecao, fatorOrigem: f.fatorOrigem, preparoIntermediario: f.preparoIntermediario,
+      // §65: aviso quando o aproveitamento saiu 100% por não ter dado pra conferir o elo.
+      eloIncompleto: f.eloIncompleto || null,
+      // 02/09/2026: estes dois JÁ eram lidos em `acumularContagem` (aba Contagem do relatório) mas
+      // nunca eram repassados aqui — chegavam sempre undefined, então a aba Contagem nunca mostrava
+      // gap de ficha nem o % registrado, ao contrário da aba Vendas. Não é campo novo, é vazamento.
+      terminalPorFaltaDeFicha: !!f.terminalPorFaltaDeFicha,
+      percentualAproveitamentoRegistrado: f.percentualAproveitamentoRegistrado ?? null
+    })),
     gap: false
   }
 }
 
-export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = null }) {
+export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = null, insumosExtras = [] }) {
   const datas = grupoId ? await listarDatasContagemPorGrupo(grupoId) : []
   const acharData = (data) => (data ? datas.find((d) => d.data === data) : null)
   const diaIni = acharData(dataInicio)
@@ -3771,14 +5198,123 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
     for (const ins of insumos) insumosRastreados.add(ins.codigoEverest)
   }
 
-  const acc = new Map() // codigoEverest -> { nome, unidade, ei, ef, compras, comprasValor, teorico }
+  // 28/08/2026 (§50) — DUAS FONTES A MAIS, a pedido do Felipe ("não posso refazer a contagem, o
+  // processo já está em andamento... não podemos colocar apenas uma flag no item de compra?").
+  //
+  // O problema: esta lista saía SÓ dos itens CADASTRADOS no grupo. Um insumo que não está
+  // cadastrado nunca entra no relatório — nem as compras dele —, mesmo que a equipe o tenha
+  // contado. Foi assim que o filet mignon sumiu de um grupo chamado "CTG Filet Mignon".
+  //
+  // (1) Produtos EFETIVAMENTE CONTADOS nas sessões escolhidas também passam a rastrear. Se alguém
+  //     contou, o relatório tem que enxergar — cadastro desatualizado não pode apagar dado real.
+  // (2) `insumosExtras` deixa incluir um insumo na hora do cálculo, sem tocar no grupo. É a
+  //     "flag" que o Felipe pediu: resolve agora, no meio do processo, sem mudar a rotina da
+  //     equipe nem obrigar ninguém a recontar.
+  for (const codigo of (insumosExtras || [])) {
+    if (codigo) insumosRastreados.add(String(codigo))
+  }
+  const idsSessoesRastreio = [...(diaIni?.sessoes || []), ...(diaFim?.sessoes || [])].map((x) => x.id || x).filter(Boolean)
+  if (idsSessoesRastreio.length) {
+    const contadosReais = await buscarPorIdsEmLotes(
+      (lote) => supabase.from('itens_contagem')
+        .select('produtos(codigo_everest, nome, unidade_medida, categoria)')
+        .in('sessao_id', lote),
+      idsSessoesRastreio
+    )
+    const jaVistos = new Set()
+    for (const it of contadosReais) {
+      const pr = it.produtos
+      if (!pr?.codigo_everest || jaVistos.has(pr.codigo_everest)) continue
+      jaVistos.add(pr.codigo_everest)
+      const { insumos } = await converterParaInsumos(pr.codigo_everest, pr.categoria, pr.nome, pr.unidade_medida, 1)
+      for (const ins of insumos) insumosRastreados.add(ins.codigoEverest)
+    }
+  }
+
+  // 13/08/2026, pedido do Felipe ("mapear o que aconteceu com o filet mignon no período"): além do
+  // total teórico por insumo, guarda `porPrato` — de qual prato veio cada pedaço desse consumo
+  // teórico (nome, quantidade vendida do prato, quantidade de insumo que isso gerou). Antes esse
+  // detalhe era descartado na hora de somar; sem ele não dava pra responder "quais pratos usaram
+  // esse insumo e quanto cada um pesou" — só o total agregado.
+  const acc = new Map() // codigoEverest -> { nome, unidade, ei, ef, compras, comprasValor, teorico, perda, porPrato, porContagem }
   const get = (codigo, nome, unidade) => {
-    if (!acc.has(codigo)) acc.set(codigo, { codigoEverest: codigo, nome, unidade, ei: 0, ef: 0, compras: 0, comprasValor: 0, teorico: 0 })
+    if (!acc.has(codigo)) acc.set(codigo, { codigoEverest: codigo, nome, unidade, ei: 0, ef: 0, compras: 0, comprasValor: 0, teorico: 0, perda: 0, perdaPorMotivo: new Map(), porPrato: new Map(), porContagem: new Map() })
     return acc.get(codigo)
   }
   const gapsContagem = new Set()
   const gapsCompras = new Set()
 
+  // 25/08/2026 (§34), pedido do Felipe: "é possível usar o consumo teórico das vendas nessa
+  // contagem?" — ou seja, teórico POR ITEM CONTADO (ex.: quanto de "PP Filet Mignon Aparas" as
+  // vendas do período deveriam ter consumido), não só por insumo em natura.
+  //
+  // O teórico do relatório é calculado saltando direto do prato pro insumo em natura
+  // (`buscarInsumosEmNatura`), o que ACHATA a cadeia e perde os PPs do meio — justamente os itens
+  // que aparecem na contagem. Para ter o número por item contado é preciso olhar os ingredientes
+  // DIRETOS da ficha de cada prato vendido, e descer nos PPs a partir dali.
+  //
+  // Cuidado com dupla contagem: como o Everest já achata (§19.1), a ficha do prato costuma trazer
+  // o PP intermediário E o insumo em natura lado a lado. Por isso, para cada prato, a linha DIRETA
+  // manda: um código que aparece direto na ficha não recebe nada da descida recursiva.
+  const teoricoPorItemContado = new Map() // codigo_everest do item -> quantidade na unidade dele
+  async function acumularTeoricoPorItem(codigoPrato, qtdVendida) {
+    const { codigosComFicha, fichaIdPorCodigo, ingredientesPorFicha } = await carregarFichasParaConversao()
+    const doPrato = new Map()
+    const diretos = new Set()
+    const fichaPrato = fichaIdPorCodigo.get(codigoPrato)
+    if (!fichaPrato) return
+    for (const ing of (ingredientesPorFicha.get(fichaPrato) || [])) {
+      if (!ing.codigo_everest) continue
+      diretos.add(ing.codigo_everest)
+      const q = (Number(ing.quantidade_baixa_estoque) || 0) * qtdVendida
+      doPrato.set(ing.codigo_everest, (doPrato.get(ing.codigo_everest) || 0) + q)
+    }
+    // Desce nos PPs pra alcançar itens contados que estejam mais fundo na cadeia.
+    const descer = (codigo, mult, profundidade, visitados) => {
+      if (profundidade > 6 || visitados.has(codigo)) return
+      const id = fichaIdPorCodigo.get(codigo)
+      if (!id) return
+      const proximos = new Set([...visitados, codigo])
+      for (const ing of (ingredientesPorFicha.get(id) || [])) {
+        if (!ing.codigo_everest) continue
+        const q = (Number(ing.quantidade_baixa_estoque) || 0) * mult
+        if (!diretos.has(ing.codigo_everest)) {
+          doPrato.set(ing.codigo_everest, (doPrato.get(ing.codigo_everest) || 0) + q)
+        }
+        if (codigosComFicha.has(ing.codigo_everest)) descer(ing.codigo_everest, q, profundidade + 1, proximos)
+      }
+    }
+    for (const codigo of [...diretos]) {
+      if (codigosComFicha.has(codigo)) descer(codigo, doPrato.get(codigo) || 0, 1, new Set([codigoPrato]))
+    }
+    for (const [codigo, q] of doPrato) {
+      teoricoPorItemContado.set(codigo, (teoricoPorItemContado.get(codigo) || 0) + q)
+    }
+  }
+
+  // 25/08/2026 (§32), pedido do Felipe: "achei um item que não apareceu no relatório... será que
+  // estamos puxando os dados corretos?". Resposta: existiam descartes SILENCIOSOS em 3 pontos
+  // (produto sem categoria/sem ficha, venda com produto_id órfão, e o filtro por grupo de
+  // contagem). A partir daqui, TODO item lido é contabilizado: ou entra na conta, ou entra em
+  // `conferencia.<fonte>.descartados` com o motivo. A tela mostra isso como "Conferência dos
+  // dados", pra nunca mais um item sumir sem deixar rastro.
+  const conferencia = {
+    contagem: { lidos: 0, produtosDistintos: 0, entraram: 0, descartados: [] },
+    compras: { lidos: 0, produtosDistintos: 0, entraram: 0, descartados: [] },
+    vendas: { lidos: 0, pratosDistintos: 0, entraram: 0, descartados: [] }
+  }
+  const registrarDescarte = (fonte, item) => {
+    // Evita repetir o mesmo produto várias vezes na lista (ex.: contado no inicial E no final).
+    const ja = conferencia[fonte].descartados.find((d) => d.codigo === item.codigo && d.motivo === item.motivo)
+    if (ja) { ja.ocorrencias += 1; return }
+    conferencia[fonte].descartados.push({ ...item, ocorrencias: 1 })
+  }
+
+  // 14/08/2026 (3), pedido do Felipe: quer uma aba "Contagem" no popup, do mesmo jeito que já existe
+  // a aba "Vendas" (de onde veio o TEÓRICO) — mas mostrando de onde veio o REAL: quais produtos
+  // contados geraram o estoque inicial/final desse insumo, e a mesma memória de cálculo (fator de
+  // correção) já usada do lado das vendas. `porContagem` guarda, por campo ('ei'/'ef'), 1 linha por
+  // produto contado que contribuiu pra esse insumo nesse campo.
   async function acumularContagem(idsSessoes, campo) {
     if (!idsSessoes.length) return
     const itens = await buscarTodasAsLinhas(() =>
@@ -3787,41 +5323,175 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
         .in('sessao_id', idsSessoes)
     )
     const porProduto = new Map()
+    conferencia.contagem.lidos += itens.length
     for (const it of itens) {
-      if (!it.produto_id || !it.produtos?.codigo_everest) continue
+      if (!it.produto_id || !it.produtos?.codigo_everest) {
+        registrarDescarte('contagem', {
+          nome: it.produtos?.nome || '(produto não encontrado no cadastro)',
+          codigo: it.produtos?.codigo_everest || '—',
+          quantidade: Number(it.quantidade) || 0,
+          motivo: 'lançamento sem produto válido no cadastro atual'
+        })
+        continue
+      }
       if (!porProduto.has(it.produto_id)) porProduto.set(it.produto_id, { ...it.produtos, quantidade: 0 })
       porProduto.get(it.produto_id).quantidade += Number(it.quantidade) || 0
     }
+    conferencia.contagem.produtosDistintos += porProduto.size
     for (const p of porProduto.values()) {
-      const { insumos, gap } = await converterParaInsumos(p.codigo_everest, p.categoria, p.nome, p.unidade_medida, p.quantidade)
+      const { insumos, gap, motivo } = await converterParaInsumos(p.codigo_everest, p.categoria, p.nome, p.unidade_medida, p.quantidade)
       if (gap) { gapsContagem.add(`${p.nome} (${p.codigo_everest})`); continue }
-      for (const ins of insumos) get(ins.codigoEverest, ins.nome, ins.unidade)[campo] += ins.quantidade
+      if (!insumos.length) {
+        registrarDescarte('contagem', {
+          nome: p.nome, codigo: p.codigo_everest, quantidade: p.quantidade,
+          unidade: p.unidade_medida, categoria: p.categoria || null,
+          motivo: motivo || 'ficha cadastrada, mas nenhum ingrediente dela (nem descendo a cadeia) é insumo em natura'
+        })
+        continue
+      }
+      conferencia.contagem.entraram += 1
+      for (const ins of insumos) {
+        const linha = get(ins.codigoEverest, ins.nome, ins.unidade)
+        linha[campo] += ins.quantidade
+        if (!linha.porContagem.has(campo)) linha.porContagem.set(campo, new Map())
+        const porProdutoDoCampo = linha.porContagem.get(campo)
+        if (!porProdutoDoCampo.has(p.codigo_everest)) {
+          porProdutoDoCampo.set(p.codigo_everest, {
+            codigoProduto: p.codigo_everest, nome: p.nome, unidadeProduto: p.unidade_medida,
+            quantidadeContada: p.quantidade, quantidadeGerada: 0, quantidadeLiquidaGerada: 0,
+            fatorCorrecao: ins.fatorCorrecao, fatorOrigem: ins.fatorOrigem, preparoIntermediario: ins.preparoIntermediario,
+            terminalPorFaltaDeFicha: !!ins.terminalPorFaltaDeFicha,
+            percentualAproveitamentoRegistrado: ins.percentualAproveitamentoRegistrado ?? null,
+            eloIncompleto: ins.eloIncompleto || null // §65
+          })
+        }
+        porProdutoDoCampo.get(p.codigo_everest).quantidadeGerada += ins.quantidade
+        porProdutoDoCampo.get(p.codigo_everest).quantidadeLiquidaGerada += ins.quantidadeLiquida
+      }
     }
   }
 
   await acumularContagem(diaIni ? diaIni.sessoes.map((s) => s.id) : [], 'ei')
   await acumularContagem(diaFim ? diaFim.sessoes.map((s) => s.id) : [], 'ef')
 
+  // ── PERDAS DO PERÍODO (§55) ────────────────────────────────────────────────
+  // Pedido do Felipe: ver, ao lado da diferença, quanto desse insumo foi desperdiçado — no total
+  // e por item contado.
+  //
+  // ⚠️ NÃO ENTRA NA CONTA. `real`, `teorico` e `diferenca` continuam exatamente como estavam.
+  // Decisão travada no §55: nesta 1ª versão a perda é só informação, porque perda mal lançada
+  // entrando no CMV estragaria um número que hoje está confiável. Quando o time estiver lançando
+  // com qualidade, a decisão de abater se toma com dado na mão.
+  //
+  // A perda é gravada nas MESMAS tabelas da contagem (sessão tipo 'perdas'), então este bloco é
+  // deliberadamente separado dos acumuladores de contagem — misturar seria somar perda ao estoque.
+  const perdaPorItemContado = new Map() // codigo_everest do item lançado -> quantidade crua perdida
+  const perdaDetalhePorInsumo = new Map() // codigoEverest do insumo -> linhas de origem da perda
+  if (dataInicio && dataFim) {
+    // Não dá pra filtrar a data no banco: sessão antiga pode ter `data_referencia` nula e cair no
+    // fallback `iniciada_em` (mesma cadeia usada em todo o resto — `dataDaSessao`).
+    const { data: sessoesPerda, error: erroPerda } = await supabase
+      .from('sessoes_contagem')
+      .select('id, data_referencia, iniciada_em')
+      .eq('tipo', 'perdas')
+    if (erroPerda) throw erroPerda
+    const idsPerda = (sessoesPerda || [])
+      .filter((sp) => { const d = dataDaSessao(sp); return d && d >= dataInicio && d <= dataFim })
+      .map((sp) => sp.id)
+
+    if (idsPerda.length) {
+      const itensPerda = await buscarPorIdsEmLotes(
+        (lote) => supabase.from('itens_contagem')
+          .select('produto_id, quantidade, motivo_perda, modo_perda, produtos(nome, codigo_everest, unidade_medida, categoria)')
+          .in('sessao_id', lote),
+        idsPerda
+      )
+      // Agrupa por produto + motivo: o mesmo item pode ter sido lançado várias vezes no período
+      // (turnos diferentes, motivos diferentes) e cada motivo merece linha própria no detalhe.
+      const porProdutoPerda = new Map()
+      for (const it of itensPerda) {
+        const cod = it.produtos?.codigo_everest
+        if (!cod) continue // sem código canônico não há como converter — §1
+        const chave = `${cod}|${it.motivo_perda || '—'}`
+        if (!porProdutoPerda.has(chave)) {
+          porProdutoPerda.set(chave, { ...it.produtos, motivo: it.motivo_perda || null, modo: it.modo_perda || 'peso', quantidade: 0 })
+        }
+        porProdutoPerda.get(chave).quantidade += Number(it.quantidade) || 0
+      }
+      for (const p of porProdutoPerda.values()) {
+        perdaPorItemContado.set(p.codigo_everest, (perdaPorItemContado.get(p.codigo_everest) || 0) + p.quantidade)
+        // Prato lançado por porções resolve pela ficha; matéria-prima e PP, pelo mesmo conversor
+        // que a contagem já usa. Uma perda que não converte NÃO é descartada em silêncio: entra
+        // como gap, igual a qualquer outro item que o motor não consegue resolver.
+        const { insumos, gap } = await converterParaInsumos(p.codigo_everest, p.categoria, p.nome, p.unidade_medida, p.quantidade)
+        if (gap || !insumos.length) {
+          gapsContagem.add(`${p.nome} (${p.codigo_everest}) — perda não convertida`)
+          continue
+        }
+        for (const ins of insumos) {
+          const v = get(ins.codigoEverest, ins.nome, ins.unidade)
+          v.perda += ins.quantidade
+          // Quebra por motivo: é o que permite mostrar a diferença DECOMPOSTA (estragado /
+          // sobra / erro de preparo) em vez de um total solto que não explica nada.
+          const chaveMotivo = p.motivo || 'sem_motivo'
+          v.perdaPorMotivo.set(chaveMotivo, (v.perdaPorMotivo.get(chaveMotivo) || 0) + ins.quantidade)
+          if (!perdaDetalhePorInsumo.has(ins.codigoEverest)) perdaDetalhePorInsumo.set(ins.codigoEverest, [])
+          perdaDetalhePorInsumo.get(ins.codigoEverest).push({
+            codigoProduto: p.codigo_everest,
+            nome: p.nome,
+            motivo: p.motivo,
+            modo: p.modo,
+            unidadeLancada: p.modo === 'prato' ? 'porções' : p.unidade_medida,
+            quantidadeLancada: Math.round(p.quantidade * 1000) / 1000,
+            quantidadeInsumo: Math.round(ins.quantidade * 1000) / 1000,
+            fatorCorrecao: ins.fatorCorrecao != null ? Math.round(ins.fatorCorrecao * 10000) / 10000 : null
+          })
+        }
+      }
+    }
+  }
+
   if (dataInicio && dataFim) {
     const { data: notas } = await supabase.from('notas_importadas').select('id').gte('data_emissao', dataInicio).lte('data_emissao', dataFim)
     const nIds = (notas || []).map((n) => n.id)
     if (nIds.length) {
-      const itensCompra = await buscarTodasAsLinhas(() =>
-        supabase.from('notas_importadas_itens')
+      const itensCompra = await buscarPorIdsEmLotes(
+        (lote) => supabase.from('notas_importadas_itens')
           .select('produto_id, quantidade, valor_total, calcula_cmv, produtos(nome, codigo_everest, unidade_medida, categoria)')
-          .in('nota_id', nIds)
+          .in('nota_id', lote),
+        nIds
       )
       const porProdutoCompra = new Map()
+      conferencia.compras.lidos += itensCompra.length
       for (const it of itensCompra) {
-        if (!it.produto_id || !it.produtos?.codigo_everest || it.calcula_cmv === false) continue
+        if (it.calcula_cmv === false) continue // o próprio Everest marcou fora do custo — exclusão intencional (§4)
+        if (!it.produto_id || !it.produtos?.codigo_everest) {
+          registrarDescarte('compras', {
+            nome: it.produtos?.nome || '(produto não encontrado no cadastro)',
+            codigo: it.produtos?.codigo_everest || '—',
+            quantidade: Number(it.quantidade) || 0,
+            motivo: 'compra sem produto válido no cadastro atual'
+          })
+          continue
+        }
         if (!porProdutoCompra.has(it.produto_id)) porProdutoCompra.set(it.produto_id, { ...it.produtos, quantidade: 0, valor: 0 })
         const pc = porProdutoCompra.get(it.produto_id)
         pc.quantidade += Number(it.quantidade) || 0
         pc.valor += Number(it.valor_total) || 0
       }
+      conferencia.compras.produtosDistintos += porProdutoCompra.size
       for (const p of porProdutoCompra.values()) {
-        const { insumos, gap } = await converterParaInsumos(p.codigo_everest, p.categoria, p.nome, p.unidade_medida, p.quantidade)
+        const { insumos, gap, motivo } = await converterParaInsumos(p.codigo_everest, p.categoria, p.nome, p.unidade_medida, p.quantidade)
         if (gap) { gapsCompras.add(`${p.nome} (${p.codigo_everest})`); continue }
+        if (!insumos.length) {
+          registrarDescarte('compras', {
+            nome: p.nome, codigo: p.codigo_everest, quantidade: p.quantidade,
+            unidade: p.unidade_medida, categoria: p.categoria || null,
+            motivo: motivo || 'ficha cadastrada, mas nenhum ingrediente dela (nem descendo a cadeia) é insumo em natura'
+          })
+          continue
+        }
+        let entrouAlgum = false
         for (const ins of insumos) {
           if (insumosRastreados.size && !insumosRastreados.has(ins.codigoEverest)) continue // fora do grupo escolhido
           const linha = get(ins.codigoEverest, ins.nome, ins.unidade)
@@ -3831,6 +5501,15 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
           // compra), não dá pra saber quanto do valor pago é de cada um — não atribui (custo desse
           // insumo cai pro fallback via ficha técnica, ver abaixo).
           if (insumos.length === 1) linha.comprasValor += p.valor
+          entrouAlgum = true
+        }
+        if (entrouAlgum) conferencia.compras.entraram += 1
+        else {
+          registrarDescarte('compras', {
+            nome: p.nome, codigo: p.codigo_everest, quantidade: p.quantidade,
+            unidade: p.unidade_medida, categoria: p.categoria || null,
+            motivo: 'insumo fora do grupo de contagem escolhido'
+          })
         }
       }
     }
@@ -3840,21 +5519,80 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
     // restringe ao grupo escolhido é o filtro por insumosRastreados logo abaixo.
     const vitens = await buscarTodasAsLinhas(() =>
       supabase.from('vendas_importadas_itens')
-        .select('produto_id, codigo_everest, quantidade, cancelado')
+        .select('produto_id, codigo_everest, nome_original, quantidade, cancelado')
         .gte('data_movimento', dataInicio).lte('data_movimento', dataFim)
     )
     const vendidoPorPrato = new Map()
+    const nomePratoPorCodigo = new Map()
+    conferencia.vendas.lidos += vitens.length
     for (const vi of vitens) {
-      if (!vi.produto_id || vi.cancelado || !vi.codigo_everest) continue
+      if (vi.cancelado) continue // exclusão intencional e já documentada (§4)
+      // 25/08/2026 (§32) — FURO CORRIGIDO: aqui exigia-se `vi.produto_id` além do código Everest.
+      // `vendas_importadas_itens.produto_id` é NULLABLE e é um retrato de quando a venda foi
+      // importada: se `produtos` foi zerado/reimportado depois (o que aconteceu na faxina de
+      // agosto), ele fica nulo/órfão — e a venda inteira era descartada em silêncio, mesmo com
+      // `codigo_everest` preenchido. E o teórico só precisa do código Everest, que é a identidade
+      // canônica (§1). A exigência de produto_id foi removida.
+      if (!vi.codigo_everest) {
+        registrarDescarte('vendas', {
+          nome: vi.nome_original || '(sem nome)', codigo: '—',
+          quantidade: Number(vi.quantidade) || 0,
+          motivo: 'venda sem código Everest'
+        })
+        continue
+      }
       vendidoPorPrato.set(vi.codigo_everest, (vendidoPorPrato.get(vi.codigo_everest) || 0) + (Number(vi.quantidade) || 0))
+      if (!nomePratoPorCodigo.has(vi.codigo_everest)) nomePratoPorCodigo.set(vi.codigo_everest, vi.nome_original)
     }
+    conferencia.vendas.pratosDistintos = vendidoPorPrato.size
     for (const [codigoPrato, qtdVendida] of vendidoPorPrato) {
+      const nomePrato = nomePratoPorCodigo.get(codigoPrato) || codigoPrato
       if (!qtdVendida) continue
       const folhas = await buscarInsumosEmNatura(codigoPrato)
-      if (!folhas) continue // prato sem ficha (ex. revenda direta) — não gera consumo teórico de insumo
+      if (!folhas) {
+        // Prato sem ficha (ex.: revenda direta) — continua sem gerar consumo teórico, mas agora
+        // aparece na conferência em vez de sumir.
+        registrarDescarte('vendas', {
+          nome: nomePrato, codigo: codigoPrato, quantidade: qtdVendida,
+          motivo: 'prato vendido sem ficha técnica cadastrada'
+        })
+        continue
+      }
+      await acumularTeoricoPorItem(codigoPrato, qtdVendida)
+      let entrouAlgumPrato = false
       for (const f of folhas) {
         if (insumosRastreados.size && !insumosRastreados.has(f.codigoEverest)) continue // fora do grupo escolhido
-        get(f.codigoEverest, f.nome, f.unidade).teorico += f.quantidadePorUnidade * qtdVendida
+        const linha = get(f.codigoEverest, f.nome, f.unidade)
+        const quantidadeInsumo = f.quantidadePorUnidade * qtdVendida // bruto (o que sai do estoque)
+        const quantidadeLiquida = f.quantidadeLiquidaPorUnidade * qtdVendida // líquido (o que vai pro prato)
+        linha.teorico += quantidadeInsumo
+        // Detalhe por prato (ver comentário no `acc` acima) — soma se o mesmo prato aparecer mais
+        // de uma vez (não deveria, `vendidoPorPrato` já agrupa por código, mas protege mesmo assim).
+        // 13/08/2026, pedido do Felipe: guarda também a quantidade LÍQUIDA e o fator de correção
+        // (ver `buscarInsumosEmNatura`) — o fator é fixo por par prato/insumo (vem da ficha), não
+        // precisa somar, só grava 1 vez.
+        if (!linha.porPrato.has(codigoPrato)) {
+          linha.porPrato.set(codigoPrato, {
+            codigoPrato, nome: nomePrato, quantidadeVendida: 0, quantidadeInsumo: 0, quantidadeLiquida: 0,
+            fatorCorrecao: f.fatorCorrecao, fatorOrigem: f.fatorOrigem,
+            fatorRegistrado: f.fatorRegistrado, percentualAproveitamentoRegistrado: f.percentualAproveitamentoRegistrado,
+            preparoIntermediario: f.preparoIntermediario,
+            eloIncompleto: f.eloIncompleto || null, // §65
+            terminalPorFaltaDeFicha: !!f.terminalPorFaltaDeFicha
+          })
+        }
+        const pp = linha.porPrato.get(codigoPrato)
+        pp.quantidadeVendida += qtdVendida
+        pp.quantidadeInsumo += quantidadeInsumo
+        pp.quantidadeLiquida += quantidadeLiquida
+        entrouAlgumPrato = true
+      }
+      if (entrouAlgumPrato) conferencia.vendas.entraram += 1
+      else {
+        registrarDescarte('vendas', {
+          nome: nomePrato, codigo: codigoPrato, quantidade: qtdVendida,
+          motivo: 'nenhum insumo desse prato pertence ao grupo de contagem escolhido'
+        })
       }
     }
   }
@@ -3905,8 +5643,15 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
     const melhorPorCodigo = new Map() // codigo -> { custo, dataVersao }
     for (const lote of lotes) {
       const { data: ings } = await supabase.from('fichas_tecnicas_ingredientes')
-        .select('codigo_everest, custo_unitario, custo_medio, fichas_tecnicas(data_versao)').in('codigo_everest', lote)
-      for (const ing of (ings || [])) {
+        .select('codigo_everest, custo_unitario, custo_medio, tipo_baixa, fichas_tecnicas(data_versao)').in('codigo_everest', lote)
+      // 12/08/2026: prioriza linhas marcadas "Consumo" (ver ehLinhaDeConsumo) — sem isso, uma linha
+      // de achatamento/desmontagem redundante do Everest podia ser escolhida como "o preço" desse
+      // insumo. Continua sendo só um fallback de último caso (compras reais do período são
+      // preferidas acima) — se nenhuma linha do insumo estiver marcada "Consumo", usa qualquer uma
+      // em vez de não achar preço nenhum.
+      const consumo = (ings || []).filter((ing) => ehLinhaDeConsumo(ing.tipo_baixa))
+      const candidatas = consumo.length ? consumo : (ings || [])
+      for (const ing of candidatas) {
         const cu = Number(ing.custo_unitario) || Number(ing.custo_medio) || 0
         if (cu <= 0) continue
         const dataVersao = ing.fichas_tecnicas?.data_versao || ''
@@ -3925,19 +5670,124 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
   // consumimos MAIS que o esperado (perda/quebra, sinaliza em vermelho). Mesma direção já usada em
   // "Consumo teórico × Venda" (buscarConsumoXVenda, §19.4) — teórico sempre vem primeiro na conta.
   const r3 = (x) => Math.round((Number(x) || 0) * 1000) / 1000
+  // Detalhe "de onde veio esse consumo" (pedido do Felipe, 13/08/2026) — mostra no máximo os 20
+  // pratos que mais pesaram no teórico desse insumo; se tiver mais, avisa quantos ficaram de fora
+  // em vez de esconder em silêncio (a lista já vem ordenada, então quem ficou de fora é sempre o
+  // que menos pesou).
+  const LIMITE_PRATOS_POPUP = 20
   const linhas = Array.from(acc.values())
     .map((v) => {
       const real = v.ei + v.compras - v.ef
       const diferenca = v.teorico - real
       const custoUnitario = custoUnitarioPorCodigo.get(v.codigoEverest) || null
+      const pratosOrdenados = Array.from(v.porPrato.values()).sort((a, b) => b.quantidadeInsumo - a.quantidadeInsumo)
+      // 14/08/2026 (3) — mesma ideia do `pratosOrdenados` acima, só que pro lado da CONTAGEM (estoque
+      // inicial/final) em vez das vendas (teórico). Cada entrada = 1 produto contado que gerou parte
+      // desse insumo nesse campo, já com a memória de cálculo (fator de correção) pronta pro popup.
+      const contagemPorCampo = (campo) => {
+        const porProdutoMap = v.porContagem.get(campo)
+        if (!porProdutoMap) return []
+        return Array.from(porProdutoMap.values())
+          .sort((a, b) => b.quantidadeGerada - a.quantidadeGerada)
+          .map((p) => ({
+            codigoProduto: p.codigoProduto, nome: p.nome, unidadeProduto: p.unidadeProduto,
+            quantidadeContada: r3(p.quantidadeContada),
+            quantidadeGerada: r3(p.quantidadeGerada),
+            quantidadeLiquidaGerada: r3(p.quantidadeLiquidaGerada),
+            fatorCorrecao: p.fatorCorrecao != null ? Math.round(p.fatorCorrecao * 10000) / 10000 : null,
+            fatorOrigem: p.fatorOrigem,
+            terminalPorFaltaDeFicha: !!p.terminalPorFaltaDeFicha,
+            percentualAproveitamentoRegistrado: p.percentualAproveitamentoRegistrado ?? null,
+            preparoIntermediario: p.preparoIntermediario || null,
+            eloIncompleto: p.eloIncompleto || null, // §65
+
+            // §34: quanto as vendas do período deveriam ter consumido DESTE item contado,
+            // na unidade dele. null = esse item não aparece na ficha de nenhum prato vendido
+            // (não dá pra atribuir teórico a ele — não é o mesmo que zero).
+            teoricoDoItem: teoricoPorItemContado.has(p.codigoProduto)
+              ? Math.round(teoricoPorItemContado.get(p.codigoProduto) * 1000) / 1000
+              : null,
+            // §55: quanto DESTE item foi lançado como perda no período, na unidade dele (o mesmo
+            // número que a pessoa digitou no celular). null = nenhuma perda lançada — diferente
+            // de zero, que aqui não existe: ninguém lança perda de 0.
+            perdaDoItem: perdaPorItemContado.has(p.codigoProduto)
+              ? Math.round(perdaPorItemContado.get(p.codigoProduto) * 1000) / 1000
+              : null
+          }))
+      }
       return {
         codigoEverest: v.codigoEverest, nome: v.nome, unidade: v.unidade,
         subgrupoEverest: subgrupoEverestPorCodigo.get(v.codigoEverest) || null,
         estoqueInicial: r3(v.ei), compras: r3(v.compras), estoqueFinal: r3(v.ef),
         real: r3(real), teorico: r3(v.teorico), diferenca: r3(diferenca),
+        // §55: perda do período convertida pro insumo base. NÃO é abatida de `real`, `teorico`
+        // nem `diferenca` — é informação ao lado, pra ajudar a explicar a diferença.
+        perda: r3(v.perda),
+        perdaValor: custoUnitario != null ? Math.round((v.perda || 0) * custoUnitario * 100) / 100 : null,
+        // [{ motivo, quantidade, valor }] — ordenado do maior pro menor, que é a ordem em que a
+        // pergunta "de onde vem a diferença?" quer ser respondida.
+        perdaPorMotivo: Array.from(v.perdaPorMotivo.entries())
+          .map(([motivo, q]) => ({
+            motivo,
+            quantidade: r3(q),
+            valor: custoUnitario != null ? Math.round(q * custoUnitario * 100) / 100 : null
+          }))
+          .sort((x, y) => y.quantidade - x.quantidade),
+        perdaItens: perdaDetalhePorInsumo.get(v.codigoEverest) || [],
         custoUnitario,
         custoOrigem: custoOrigemPorCodigo.get(v.codigoEverest) || null,
-        diferencaValor: custoUnitario != null ? Math.round(diferenca * custoUnitario * 100) / 100 : null
+        diferencaValor: custoUnitario != null ? Math.round(diferenca * custoUnitario * 100) / 100 : null,
+        // 14/08/2026, pedido do Felipe: pra achar as proteínas (os itens mais caros do prato), o que
+        // importa é o quanto esse insumo pesou no custo do período — não o quanto ele desviou do
+        // teórico. `custoTotalReal` = valor de fato consumido (Real × custo unitário) — maior valor
+        // aqui = maior impacto no custo, tenha ele desviado do teórico ou não.
+        custoTotalReal: custoUnitario != null ? Math.round(real * custoUnitario * 100) / 100 : null,
+        // 24/08/2026, pedido do Felipe: pra achar os insumos de maior PESO EM VALOR NA RECEITA (não
+        // no que foi de fato contado/comprado no período — isso é `custoTotalReal`, ruidoso quando o
+        // insumo tem pouco movimento físico no recorte, mesmo sendo um item caro/importante nos
+        // pratos). Exemplo dele: filet mignon não aparecia no ranking por `custoTotalReal` porque o
+        // real desse período específico ficou baixo, mesmo ele estando presente em todas as
+        // contagens. `custoTotalTeorico` usa TEÓRICO (o que as fichas dos pratos vendidos nesse
+        // período esperavam consumir) × custo unitário — reflete o peso do insumo na composição das
+        // receitas vendidas, não a oscilação de estoque/contagem.
+        custoTotalTeorico: custoUnitario != null ? Math.round(v.teorico * custoUnitario * 100) / 100 : null,
+        pratos: pratosOrdenados.slice(0, LIMITE_PRATOS_POPUP).map((p) => ({
+          codigoPrato: p.codigoPrato, nome: p.nome,
+          quantidadeVendida: r3(p.quantidadeVendida),
+          quantidadeInsumo: r3(p.quantidadeInsumo), // bruto — o que sai do estoque
+          quantidadeLiquida: r3(p.quantidadeLiquida), // líquido — o que vai pro prato
+          fatorCorrecao: p.fatorCorrecao != null ? Math.round(p.fatorCorrecao * 100) / 100 : null,
+          // Memória de cálculo (14/08/2026, pedido do Felipe) — de onde saiu o fator acima, pra dar
+          // pra auditar em vez de só confiar num número. 'registrado' = veio pronto da ficha
+          // (`fator_aplicacao`); 'calculado' = essa função calculou bruto÷líquido porque a ficha não
+          // tinha o fator cadastrado; null = nem isso, porque o líquido também veio 0/vazio.
+          fatorOrigem: p.fatorOrigem,
+          fatorRegistrado: p.fatorRegistrado != null ? Math.round(p.fatorRegistrado * 100) / 100 : null,
+          percentualAproveitamentoRegistrado: p.percentualAproveitamentoRegistrado,
+          // 14/08/2026 (2) — só vem preenchido quando `fatorOrigem === 'calculado_via_preparo'`: nome
+          // do preparo intermediário (ex. "PP FILET MIGNON LIMPEZA") usado pra achar o fator de
+          // verdade, já que o cadastrado nessa linha da ficha estava sabidamente errado (ver
+          // `buscarInsumosEmNatura`).
+          preparoIntermediario: p.preparoIntermediario || null,
+          // §65: qual preparo ao lado na ficha não pôde ser conferido (ficha ausente/vazia no banco)
+          eloIncompleto: p.eloIncompleto || null,
+          terminalPorFaltaDeFicha: !!p.terminalPorFaltaDeFicha,
+          valorEstimado: custoUnitario != null ? Math.round(p.quantidadeInsumo * custoUnitario * 100) / 100 : null,
+          percentualDoTeorico: v.teorico > 0 ? Math.round((p.quantidadeInsumo / v.teorico) * 1000) / 10 : null
+        })),
+        pratosOcultos: Math.max(0, pratosOrdenados.length - LIMITE_PRATOS_POPUP),
+        // 17/08/2026 (3), pedido do Felipe ("total consumido líquido e bruto, vendas e contagem"):
+        // total de líquido somando TODOS os pratos (não só os 20 exibidos em `pratos` — por isso
+        // soma direto de `pratosOrdenados`, a lista completa, antes do corte). O total de bruto do
+        // lado de Vendas não precisa de campo novo: já existe como `teorico` (soma de
+        // `quantidadeInsumo` de todos os pratos, sempre a lista completa — ver comentário no cálculo
+        // de `real`/`diferenca` acima).
+        pratosTotalLiquido: r3(pratosOrdenados.reduce((soma, p) => soma + p.quantidadeLiquida, 0)),
+        // 14/08/2026 (3), pedido do Felipe: aba "Contagem" no popup, espelhando a aba "Vendas"
+        // (`pratos`) — de onde veio o estoque INICIAL e o estoque FINAL desse insumo (quais produtos
+        // contados, quanto cada um gerou, e a memória de cálculo do fator de correção).
+        contagemInicial: contagemPorCampo('ei'),
+        contagemFinal: contagemPorCampo('ef')
       }
     })
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
@@ -3949,7 +5799,50 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
     sessoesInicio: diaIni ? diaIni.totalSessoes : 0,
     sessoesFim: diaFim ? diaFim.totalSessoes : 0,
     gapsContagem: Array.from(gapsContagem),
-    gapsCompras: Array.from(gapsCompras)
+    gapsCompras: Array.from(gapsCompras),
+    conferencia
+  }
+}
+
+// 25/08/2026 (§32), pedido do Felipe: mesma ideia do "ver contagens", mas do lado das vendas —
+// clicar num prato dentro de "de onde vem o teórico" e ver as vendas dele no período, linha a
+// linha. Casa por `codigo_everest` (identidade canônica, §1), NUNCA por `produto_id`, que é um
+// retrato do momento do import e fica órfão quando `produtos` é reimportado.
+export async function buscarVendasDoProduto(codigoEverest, { dataInicio = null, dataFim = null } = {}) {
+  if (!codigoEverest) return { linhas: [], total: 0, totalValor: 0 }
+  let q = supabase.from('vendas_importadas_itens')
+    .select('data_movimento, nome_original, quantidade, valor_unitario, valor_total, cancelado, fantasia, grupo_venda')
+    .eq('codigo_everest', codigoEverest)
+  if (dataInicio) q = q.gte('data_movimento', dataInicio)
+  if (dataFim) q = q.lte('data_movimento', dataFim)
+  const itens = await buscarTodasAsLinhas(() => q)
+
+  // Agrupa por DIA: uma venda de restaurante gera dezenas de linhas por dia (uma por comanda) —
+  // listar linha a linha viraria um paredão ilegível. Canceladas ficam de fora do total, mas são
+  // contadas à parte pra não parecerem "dado sumido" (mesma regra do §4).
+  const porDia = new Map()
+  let canceladas = 0
+  for (const it of itens) {
+    if (it.cancelado) { canceladas += 1; continue }
+    const dia = String(it.data_movimento || '').slice(0, 10)
+    if (!porDia.has(dia)) porDia.set(dia, { data: dia, quantidade: 0, valor: 0, lancamentos: 0, loja: new Set() })
+    const g = porDia.get(dia)
+    g.quantidade += Number(it.quantidade) || 0
+    g.valor += Number(it.valor_total) || 0
+    g.lancamentos += 1
+    g.loja.add(lojaDeVenda(it.fantasia, it.grupo_venda))
+  }
+
+  const linhas = [...porDia.values()]
+    .map((g) => ({ ...g, loja: [...g.loja].join(', ') }))
+    .sort((a, b) => String(b.data).localeCompare(String(a.data)))
+
+  return {
+    nome: itens[0]?.nome_original || codigoEverest,
+    linhas,
+    canceladas,
+    total: Math.round(linhas.reduce((a, l) => a + l.quantidade, 0) * 1000) / 1000,
+    totalValor: Math.round(linhas.reduce((a, l) => a + l.valor, 0) * 100) / 100
   }
 }
 
@@ -3971,19 +5864,71 @@ export async function buscarCMVSemanal({ grupoId, dataInicio = null, dataFim = n
 //   nada, sem tentar detectar "duplicidade" (contagem física de gente diferente é aditiva).
 // - Isso alimenta uma tela própria de revisão antes de qualquer coisa — não é silencioso.
 
+// A data que VALE de uma sessão é sempre a que a pessoa INFORMOU, nunca o dia em que ela digitou.
+//
+// 02/09/2026, pedido do Felipe: "tem gente que lançou depois do dia correto, mas fez a contagem no
+// dia certo. Nenhum relatório deve levar em consideração o dia da contagem, e sim a data que eles
+// informam."
+//
+// A cadeia, em ordem de confiança:
+//  1. `data_referencia` — o dia informado no lançamento (semanal e perdas). É o mais preciso.
+//  2. `mes_referencia`/`ano_referencia` — o mês informado. É o que o INVENTÁRIO MENSAL tem: ele não
+//     pede dia nenhum, só o mês ativo. Devolvo o dia 1º como representante do mês.
+//  3. `iniciada_em` — o timestamp de criação. Último recurso, e apenas para não devolver nulo em
+//     sessão antiga sem nenhuma referência.
+//
+// ⚠️ O passo 2 é a correção. Antes, `data_referencia` ausente caía DIRETO no `iniciada_em`, então
+// todo inventário mensal era datado pelo dia da digitação — um inventário de agosto lançado em 2 de
+// setembro contava como setembro. `mesDaSessao` abaixo é o que os relatórios devem usar para
+// agrupar por mês.
 function dataDaSessao(s) {
-  return s.data_referencia || (s.iniciada_em ? String(s.iniciada_em).slice(0, 10) : null)
+  if (s.data_referencia) return s.data_referencia
+  if (s.ano_referencia && s.mes_referencia) {
+    return `${s.ano_referencia}-${String(s.mes_referencia).padStart(2, '0')}-01`
+  }
+  return s.iniciada_em ? String(s.iniciada_em).slice(0, 10) : null
+}
+
+// Mês de referência no formato AAAA-MM. Prioriza o mês INFORMADO (`mes_referencia`) sobre o mês da
+// `data_referencia`: nas contagens semanais os dois sempre batem (a data escolhida alimenta o
+// mês — §18.1), e no inventário mensal só o primeiro existe.
+function mesDaSessao(s) {
+  if (s.ano_referencia && s.mes_referencia) {
+    return `${s.ano_referencia}-${String(s.mes_referencia).padStart(2, '0')}`
+  }
+  const d = dataDaSessao(s)
+  return d ? d.slice(0, 7) : null
+}
+
+// Distingue a data informada da inferida — pra tela poder avisar em vez de apresentar um dia que
+// ninguém digitou como se fosse fato.
+function origemDaDataDaSessao(s) {
+  if (s.data_referencia) return 'informada'
+  if (s.ano_referencia && s.mes_referencia) return 'mes_referencia'
+  return 'criacao'
 }
 
 // Lista as datas exatas que têm pelo menos 1 sessão de contagem semanal desse grupo de
 // contagem (em qualquer loja) — pra popular o seletor da tela de revisão e do CMV Real × Teórico.
 export async function listarDatasContagemPorGrupo(grupoId) {
   if (!grupoId) return []
+  // 09/09/2026: passou a filtrar `status = 'finalizada'`. Antes, uma sessão 'em_andamento' —
+  // alguém começou a contar, não terminou, e nunca mais voltou — entrava na soma junto com a
+  // sessão de verdade da mesma data, porque cada item já é gravado no banco assim que a pessoa
+  // digita (não só no envio final). Isso inflava estoque inicial/final sem nenhuma compra ou
+  // contagem física explicando a diferença — foi exatamente o padrão investigado com o Felipe
+  // (estoque final maior que inicial + compras).
+  //
+  // Esta função alimenta só as CONTAS (`buscarCMVSemanal`, `buscarConsolidadoPorData`) e os
+  // seletores de data dessas duas telas — nunca o Histórico de sessões do admin (que usa
+  // `listarSessoes`, sem esse filtro, de propósito: é lá que se precisa VER e agir sobre sessão
+  // em andamento, não escondê-la).
   const { data: sessoes, error } = await supabase
     .from('sessoes_contagem')
     .select('id, data_referencia, iniciada_em, status')
     .eq('grupo_id', grupoId)
     .eq('tipo', 'semanal')
+    .eq('status', 'finalizada')
   if (error) throw error
   const porData = new Map()
   for (const s of (sessoes || [])) {
@@ -4005,41 +5950,738 @@ export async function listarDatasContagemPorGrupo(grupoId) {
 // não precisamos recursão manual nem montar tabela par-a-par. Ver DECISOES-TRAVADAS.md §19
 // (exemplo completo, testado com o Filet Mignon).
 let _cacheFichasConversao = null
+
+// 28/08/2026 — BUG: o cache acima nunca era invalidado. Ele é carregado na PRIMEIRA vez que
+// qualquer tela pede conversão (CMV, Diagnóstico, Árvore, Consolidado) e vive enquanto a aba
+// estiver aberta. Importar fichas técnicas na mesma sessão gravava tudo certo no banco, mas todo
+// relatório continuava lendo o retrato ANTERIOR ao import — a ficha nova simplesmente não
+// existia para o motor. Foi o que aconteceu com o `EV PR FILET PURE MANDIOCA` (1869): import
+// reportou sucesso (755 fichas), e o Diagnóstico seguiu dizendo "SEM FICHA TÉCNICA".
+//
+// Sintoma traiçoeiro: some sozinho ao recarregar a página, o que faz parecer problema de import
+// ou de vínculo do produto. Agora todo caminho que ESCREVE em fichas_tecnicas limpa o cache.
+export function invalidarCacheFichas() {
+  _cacheFichasConversao = null
+  _cacheFichasTravadasIncompletas = null
+}
+
 async function carregarFichasParaConversao() {
   if (_cacheFichasConversao) return _cacheFichasConversao
-  const fichas = await buscarTodasAsLinhas(() => supabase.from('fichas_tecnicas').select('id, codigo_everest'))
+  const fichas = await buscarTodasAsLinhas(() => supabase.from('fichas_tecnicas').select('id, codigo_everest, nome, unidade_medida'))
   const codigosComFicha = new Set(fichas.map((f) => f.codigo_everest).filter(Boolean))
   const fichaIdPorCodigo = new Map(fichas.filter((f) => f.codigo_everest).map((f) => [f.codigo_everest, f.id]))
+  // 20/08/2026: reverso de `fichaIdPorCodigo` (ficha -> código do produto que ELA representa) +
+  // nome/unidade direto da própria ficha — usado pela Árvore de Usos (`buscarArvoreDeUsos`) pra
+  // andar PRA FRENTE (de um insumo pra tudo que é feito a partir dele), sem precisar de uma 2ª
+  // consulta a `fichas_tecnicas`.
+  const codigoPorFichaId = new Map(fichas.filter((f) => f.codigo_everest).map((f) => [f.id, f.codigo_everest]))
+  const nomePorCodigoFicha = new Map(fichas.filter((f) => f.codigo_everest).map((f) => [f.codigo_everest, f.nome]))
+  const unidadePorCodigoFicha = new Map(fichas.filter((f) => f.codigo_everest).map((f) => [f.codigo_everest, f.unidade_medida]))
   const fichaIds = fichas.map((f) => f.id)
   const ingredientesPorFicha = new Map()
   for (let i = 0; i < fichaIds.length; i += 300) {
     const lote = fichaIds.slice(i, i + 300)
     const ings = await buscarTodasAsLinhas(() =>
-      supabase.from('fichas_tecnicas_ingredientes').select('ficha_id, codigo_everest, nome, unidade_medida, quantidade_baixa_estoque').in('ficha_id', lote)
+      // 28/08/2026 (§49) — `tipo_item` FALTAVA neste select, e é ele que o motor usa desde §44 para
+      // saber o que é comprado (MATERIA PRIMA) e o que é produzido (PRODUTO EM PROCESSO). Sem o
+      // campo, `tipoPorCodigo` nascia vazio: a decisão de "insumo base" caía o tempo todo no
+      // fallback ("não tem ficha própria"), e a busca do preparo que dá o LÍQUIDO rejeitava todos
+      // os irmãos — por isso líquido saía igual ao bruto e o FC dava 1 na tela do Felipe.
+      // `tipo_baixa` vem junto porque distingue ingrediente direto (CONSUMO) da explosão da cadeia
+      // no formato novo de export.
+      supabase.from('fichas_tecnicas_ingredientes').select('ficha_id, codigo_everest, nome, unidade_medida, tipo_item, tipo_baixa, quantidade_baixa_estoque, quantidade_aplicada, fator_aplicacao, percentual_aproveitamento').in('ficha_id', lote)
     )
     for (const ing of ings) {
       if (!ingredientesPorFicha.has(ing.ficha_id)) ingredientesPorFicha.set(ing.ficha_id, [])
       ingredientesPorFicha.get(ing.ficha_id).push(ing)
     }
   }
-  _cacheFichasConversao = { codigosComFicha, fichaIdPorCodigo, ingredientesPorFicha }
+  _cacheFichasConversao = { codigosComFicha, fichaIdPorCodigo, ingredientesPorFicha, codigoPorFichaId, nomePorCodigoFicha, unidadePorCodigoFicha }
   return _cacheFichasConversao
 }
 
 // Retorna a lista de insumos em natura (folhas) por 1 unidade do produto `codigoEverest` —
 // já com a cadeia inteira resolvida (pode ter mais de 1 insumo, em receita composta).
 // Retorna null se esse código não tem ficha técnica cadastrada (gap, não zero).
+//
+// 13/08/2026, pedido do Felipe (no popup "de onde veio o teórico" do CMV Semanal, ver
+// `buscarCMVSemanal`): além da quantidade BRUTA (`quantidade_baixa_estoque` — o que sai do estoque,
+// já contando a perda de limpeza/preparo), também devolve a quantidade LÍQUIDA (`quantidade_aplicada`
+// — o que de fato vai pro prato) e o fator de correção daquele ingrediente NESSA ficha. Fator de
+// correção = bruto ÷ líquido (quanto comprar pra sobrar o líquido necessário depois da limpeza) —
+// prefere o `fator_aplicacao` já calculado pelo Everest (coluna "Fator" da Ficha Técnica); só
+// calcula na mão (bruto ÷ líquido) se essa coluna vier vazia, pra nunca ficar sem o número.
+//
+// 14/08/2026, pedido do Felipe ("não faz sentido termos fator de correção 1... precisamos enxergar
+// a memória de cálculo"): quando o fator sai 1 (bruto = líquido), isso quase sempre significa que a
+// LINHA DESSA FICHA não tem `fator_aplicacao`/`percentual_aproveitamento` cadastrado no Everest —
+// não é um bug de conta, é uma lacuna no cadastro dessa ficha específica. Pra deixar isso visível em
+// vez de só entregar um "1" sem explicação, também devolve os valores BRUTOS registrados
+// (`percentualAproveitamentoRegistrado`, `fatorRegistrado` — null quando vazio/zero, nunca 0 fingindo
+// que foi cadastrado) e `fatorOrigem` ('registrado' = veio pronto do Everest; 'calculado' = essa
+// função calculou bruto÷líquido porque a coluna Fator não veio preenchida; null = nem bruto÷líquido
+// deu pra calcular, líquido zerado).
+//
+// 14/08/2026 (2) — Felipe mandou a base de Ficha Técnica (DOM + Dalva) pra investigar o filet mignon
+// especificamente, e a causa raiz achada foi mais funda que "campo vazio": a ficha do PREPARO
+// INTERMEDIÁRIO (ex. "PP FILET MIGNON LIMPEZA", que representa o filet DEPOIS da limpeza) tem a
+// quantidade BRUTA certa cadastrada (ex. 1,247829 kg de peça crua pra produzir 1 kg de filet limpo —
+// os ~80% de rendimento real estão implícitos nessa conta), mas os campos "% Aproveitamento"/"Fator"
+// dessa MESMA linha ficam travados em 100%/1 em toda a árvore — nunca foram preenchidos de verdade no
+// Everest (confirmado em 25 fichas diferentes, sempre com a mesma razão ~1,2478, o que descarta
+// coincidência). Como esse número errado (1) também aparece "herdado" na linha informativa do insumo
+// em natura (ex. BOVINO FILET MIGNON PECA) dentro da ficha do PRATO final, a função original acabava
+// devolvendo Fator=1 mesmo quando a quantidade cadastrada já provava que havia perda real.
+// A correção: quando o fator "normal" (registrado ou bruto÷líquido da própria linha) dá EXATAMENTE 1
+// — o sintoma que motivou a investigação — procura, na mesma ficha, uma linha-irmã que seja um
+// preparo intermediário feito só a partir dessa mesma folha (tem ficha própria, e a ficha dele só
+// consome esse insumo). Achando, ignora o Fator/%Aproveitamento cadastrado (sabidamente quebrado
+// nessa cadeia) e calcula o fator de verdade como bruto (a quantidade da folha, já correta) ÷ líquido
+// (a quantidade do preparo intermediário de fato usada nessa ficha) — ex. 0,311957 ÷ 0,250000 = 1,2478
+// pro filet mignon na ficha "DD PR ALIGOT COM FILET". Ver DECISOES-TRAVADAS.md §3/§5 (achado completo).
+// ---------------------------------------------------------------------------
+// 27/08/2026 (§44) — MOTOR REESCRITO NO MODELO DE GRAFO DE CÓDIGOS.
+//
+// O Felipe descreveu o modelo certo, e ele é mais simples do que o que estava aqui:
+//   "a ficha técnica é uma aresta: o código X consome Q do código Y. Código de compra é o fim da
+//    linha. Código de venda ou de processo se desmembra até chegar num código de compra."
+//
+// O que estava errado no motor anterior:
+//   1. "Insumo base" era definido por AUSÊNCIA de dado — "linha que não tem ficha própria". Isso
+//      fazia sal e manteiga pararem a busca, e fazia PP sem ficha ser tratado como matéria-prima.
+//      Agora o critério é o que o próprio Everest declara na coluna "Tipo do Item"
+//      (`tipo_item`): MATERIA PRIMA / MERCADORIA PARA REVENDA / EMBALAGEM / MATERIAL DE USO E
+//      CONSUMO são comprados; PRODUTO EM PROCESSO / PRODUTO ACABADO são produzidos.
+//   2. A descida na cadeia só acontecia quando NENHUMA folha era encontrada (§33) — meia correção.
+//      Agora desce sempre, em todo ingrediente produzido.
+//   3. Existia uma muleta (`acharPreparoIntermediario`) que, quando o fator dava 1, procurava um
+//      preparo vizinho e recalculava o fator. Ela acertava o número pelo motivo errado. REMOVIDA:
+//      a quantidade que converte um preparo no insumo de origem já está na ficha do próprio
+//      preparo (ex.: 1,247829 kg de peça por kg de PP Filet Mignon Limpeza).
+//
+// Guarda-corpo contra dupla contagem — "LINHA DIRETA MANDA": o export do Everest costuma trazer,
+// na mesma ficha, o preparo intermediário E o insumo de origem já achatado (validado com os dois
+// arquivos reais em 27/08: nas 25 fichas que chegam na peça de filet, todas as 25 têm a peça
+// escrita nelas mesmas). Se um código aparece escrito na ficha, ele NÃO recebe nada do que a
+// recursão trouxer — senão o insumo seria contado duas vezes.
+//
+// Terminal por falta de ficha: produto declarado como produzido mas sem ficha cadastrada não é
+// descartado (66 casos na base real) — entra como terminal e fica marcado com
+// `terminalPorFaltaDeFicha`, pra aparecer como gap na tela em vez de sumir da conta.
+//
+// VALIDADO contra os dois exports reais (DOM 186 fichas + Dalva 417): o consumo calculado pelo
+// grafo reproduz a linha achatada do Everest nos 14 pratos vendáveis que usam filet, com precisão
+// de 6 casas; e o resultado é idêntico ao do motor anterior em toda a base (0 divergências
+// materiais). Ou seja: é uma correção de ROBUSTEZ, não de números — nesta base o antigo já
+// acertava, porque o Everest achata tudo. Se um dia o Everest deixar de achatar, o antigo erraria
+// e este não.
+const TIPOS_COMPRAVEIS = new Set(['MATERIA PRIMA', 'MERCADORIA PARA REVENDA', 'EMBALAGEM', 'MATERIAL DE USO E CONSUMO'])
+const PROFUNDIDADE_MAXIMA_GRAFO = 8
+
+function normalizarTipoItem(t) {
+  return String(t || '').trim().toUpperCase()
+}
+
 export async function buscarInsumosEmNatura(codigoEverest) {
   if (!codigoEverest) return null
-  const { codigosComFicha, fichaIdPorCodigo, ingredientesPorFicha } = await carregarFichasParaConversao()
-  const fichaId = fichaIdPorCodigo.get(codigoEverest)
-  if (!fichaId) return null
-  const ingredientes = ingredientesPorFicha.get(fichaId) || []
-  const folhas = ingredientes.filter((ing) => ing.codigo_everest && !codigosComFicha.has(ing.codigo_everest))
-  return folhas.map((f) => ({
-    codigoEverest: f.codigo_everest, nome: f.nome, unidade: f.unidade_medida,
-    quantidadePorUnidade: Number(f.quantidade_baixa_estoque) || 0
-  }))
+  const { fichaIdPorCodigo, ingredientesPorFicha } = await carregarFichasParaConversao()
+  if (!fichaIdPorCodigo.get(codigoEverest)) return null
+
+  // tipo_item declarado pelo Everest, por código — colhido de todas as linhas de ingrediente.
+  const tipoPorCodigo = new Map()
+  for (const lista of ingredientesPorFicha.values()) {
+    for (const ing of lista) {
+      if (ing.codigo_everest && !tipoPorCodigo.has(ing.codigo_everest)) {
+        tipoPorCodigo.set(ing.codigo_everest, normalizarTipoItem(ing.tipo_item))
+      }
+    }
+  }
+  const ehCompravel = (codigo) => {
+    const t = tipoPorCodigo.get(codigo)
+    // Sem tipo declarado e sem ficha própria: trata como comprado (é o comportamento seguro —
+    // é onde ficam itens antigos importados antes de `tipo_item` existir no schema).
+    if (!t) return !fichaIdPorCodigo.get(codigo)
+    return TIPOS_COMPRAVEIS.has(t)
+  }
+
+  const infoPorCodigo = new Map()
+  for (const lista of ingredientesPorFicha.values()) {
+    for (const ing of lista) {
+      if (ing.codigo_everest && !infoPorCodigo.has(ing.codigo_everest)) {
+        infoPorCodigo.set(ing.codigo_everest, { nome: ing.nome, unidade: ing.unidade_medida })
+      }
+    }
+  }
+
+  // Desce o grafo somando quantidade BRUTA (`quantidade_baixa_estoque`) e LÍQUIDA
+  // (`quantidade_aplicada`) por código terminal.
+  function descer(codigo, profundidade, visitados) {
+    const fichaId = fichaIdPorCodigo.get(codigo)
+    if (!fichaId || profundidade > PROFUNDIDADE_MAXIMA_GRAFO || visitados.has(codigo)) return null
+    const linhas = ingredientesPorFicha.get(fichaId) || []
+    if (!linhas.length) return null
+    const proximos = new Set([...visitados, codigo])
+
+    // Dedupe da duplicação por empresa (§30): a mesma linha vem uma vez por empresa (D.O.M. e
+    // Dalva), com quantidades idênticas e só o custo diferente. Colapsa quando bruto E líquido
+    // batem; quantidades diferentes são uso legítimo repetido e continuam somando.
+    const vistas = new Set()
+    const linhasUnicas = []
+    for (const ing of linhas) {
+      if (!ing.codigo_everest) continue
+      const assinatura = `${ing.codigo_everest}|${ing.quantidade_baixa_estoque}|${ing.quantidade_aplicada}`
+      if (vistas.has(assinatura)) continue
+      vistas.add(assinatura)
+      linhasUnicas.push(ing)
+    }
+
+    const escritosNaFicha = new Set(linhasUnicas.map((i) => i.codigo_everest))
+    const acumulado = new Map() // codigo terminal -> { bruto, liquido, terminalPorFaltaDeFicha }
+    const somar = (cod, bruto, liquido, gap) => {
+      if (!acumulado.has(cod)) acumulado.set(cod, { bruto: 0, liquido: 0, terminalPorFaltaDeFicha: false })
+      const a = acumulado.get(cod)
+      a.bruto += bruto
+      a.liquido += liquido
+      if (gap) a.terminalPorFaltaDeFicha = true
+    }
+
+    for (const ing of linhasUnicas) {
+      const bruto = Number(ing.quantidade_baixa_estoque) || 0
+      const liquidoLinha = Number(ing.quantidade_aplicada) || 0
+      const quantidade = bruto > 0 ? bruto : liquidoLinha
+      if (quantidade <= 0) continue
+
+      if (ehCompravel(ing.codigo_everest)) {
+        somar(ing.codigo_everest, bruto || quantidade, liquidoLinha || quantidade, false)
+        continue
+      }
+      const sub = descer(ing.codigo_everest, profundidade + 1, proximos)
+      if (!sub) {
+        // Produzido, mas sem ficha cadastrada — vira terminal sinalizado, nunca desaparece.
+        somar(ing.codigo_everest, bruto || quantidade, liquidoLinha || quantidade, true)
+        continue
+      }
+      for (const [cod, a] of sub) {
+        if (escritosNaFicha.has(cod)) continue // LINHA DIRETA MANDA (anti-achatamento duplicado)
+        somar(cod, a.bruto * quantidade, a.liquido * quantidade, a.terminalPorFaltaDeFicha)
+      }
+    }
+    return acumulado
+  }
+
+  const resultado = descer(codigoEverest, 0, new Set())
+  if (!resultado) return []
+
+  // 28/08/2026 (§49), correção apontada pelo Felipe: "o valor líquido já é o valor bruto e o FC não
+  // faz sentido... pensando em unidade, o líquido seria 0,150 e o bruto 0,187; o FC seria 80%".
+  //
+  // Ele está certo, e a causa é estrutural: o motor pega a linha ACHATADA do insumo (0,187174 kg de
+  // peça) e nunca olha o preparo que está ao lado dela na mesma ficha (0,150 kg de PP Filet Mignon
+  // Limpeza). Sem esse elo, líquido e bruto viram o mesmo número e o "fator" acabava exibindo a
+  // própria quantidade — 0,19 — que não é fator de coisa nenhuma.
+  //
+  // Agora, para cada insumo encontrado, procura na MESMA ficha o preparo irmão que o origina. A
+  // quantidade dele é o LÍQUIDO; o aproveitamento é líquido ÷ bruto.
+  //
+  // Dois guarda-corpos, ambos aprendidos testando contra as fichas reais (28/08):
+  //   1. O irmão precisa ser PRODUTO EM PROCESSO. Sem isso, o "DD MN Fechado Namorados 26" casava
+  //      com outro PRATO do menu e devolvia 707% de aproveitamento.
+  //   2. O irmão precisa resolver para ESSE insumo e mais nenhum — ou seja, ser feito só dele.
+  //      Sem isso, o Picadinho casava com "PP Picadinho Final Produção" (que leva outros
+  //      ingredientes) e devolvia 115%, o que é impossível numa etapa de limpeza.
+  //   3. E o produto (qtd do preparo × rendimento dele) tem que reproduzir o bruto, com 2% de
+  //      tolerância — é o que confirma que o elo achado é mesmo o caminho daquele insumo.
+  // Com as três travas, os 22 pratos com filet da base real dão 80,1%, e o Exec Carne dá
+  // exatamente 0,150 → 0,187174. Sem elo identificável, líquido = bruto e aproveitamento = 100%,
+  // que é o correto para prato que usa o insumo cru direto.
+  const linhasDaFicha = ingredientesPorFicha.get(fichaIdPorCodigo.get(codigoEverest)) || []
+
+  // 02/09/2026 (§65) — 100% NÃO PODE SAIR CALADO.
+  //
+  // O comentário acima diz que "sem elo identificável, líquido = bruto e aproveitamento = 100%, que
+  // é o correto para prato que usa o insumo cru direto". Isso é verdade para UM dos casos e falso
+  // para o outro, e os dois saíam iguais na tela:
+  //   (a) a ficha realmente não tem preparo nenhum ao lado — o prato usa a peça crua. 100% correto.
+  //   (b) a ficha TEM o preparo ao lado (ex.: `PP FILET MIGNON LIMPEZA` 0,25 junto de
+  //       `BOVINO FILET MIGNON PECA` 0,311957), mas a ficha DESSE preparo não pôde ser conferida —
+  //       ela não existe no banco, ou existe sem nenhuma linha de ingrediente (o rastro do §46:
+  //       delete que rodava sem insert). Aí o elo não é achado, o líquido cai no bruto, e a tela
+  //       afirma 100% de aproveitamento numa etapa de limpeza — que é justamente onde a perda mora.
+  //
+  // O caso (b) é o sintoma que o Felipe reportou no build 51 (`DD PR ALIGOT COM FILET`, 68
+  // vendidos, líquido = bruto = 21,213 kg) e que o motor rodado aqui contra os ARQUIVOS de ficha
+  // devolvia certo (80,1%) — ou seja, a diferença está no banco, não na conta.
+  //
+  // Esta função agora devolve, além do elo achado, a lista dos irmãos que ERAM candidatos e não
+  // deram pra conferir, com o motivo. Nada disso entra no cálculo (continuar sem elo é o
+  // comportamento seguro — inventar 80,1% seria chutar); serve pra tela poder dizer QUAL código
+  // precisa ser reimportado, em vez de mostrar um número redondo sem explicação.
+  async function acharLiquidoDoElo(codigoBase, bruto) {
+    let melhor = null
+    const incompletos = []
+    for (const irmao of linhasDaFicha) {
+      const cod = irmao.codigo_everest
+      if (!cod || cod === codigoBase) continue
+      if (normalizarTipoItem(tipoPorCodigo.get(cod)) !== 'PRODUTO EM PROCESSO') continue
+      const qtd = Number(irmao.quantidade_baixa_estoque) || Number(irmao.quantidade_aplicada) || 0
+      if (qtd <= 0) continue
+      const sub = descer(cod, 1, new Set([codigoEverest]))
+      if (!sub) {
+        // `descer` devolve null nos dois casos que impedem a conferência: sem ficha cadastrada, e
+        // com ficha mas sem linha de ingrediente. A distinção importa porque a ação é diferente
+        // (cadastrar no Everest vs. reimportar a ficha), então vai separada.
+        const temFicha = !!fichaIdPorCodigo.get(cod)
+        incompletos.push({
+          codigo: cod,
+          nome: irmao.nome,
+          quantidade: Math.round(qtd * 1000000) / 1000000,
+          motivo: temFicha ? 'ficha_vazia' : 'sem_ficha',
+          // O que o aproveitamento passaria a ser se esse elo fosse conferido — a quantidade do
+          // preparo na ficha do prato dividida pelo bruto do insumo. É a medida do impacto, não um
+          // número usado na conta.
+          aproveitamentoProvavel: bruto > 0 ? Math.round((qtd / bruto) * 1000) / 10 : null
+        })
+        continue
+      }
+      if (sub.size !== 1 || !sub.has(codigoBase)) continue
+      const previsto = sub.get(codigoBase).bruto * qtd
+      const erro = Math.abs(previsto - bruto)
+      if (erro <= Math.max(0.0005, bruto * 0.02) && (!melhor || erro < melhor.erro)) {
+        melhor = { quantidade: qtd, erro, nome: irmao.nome, codigo: cod }
+      }
+    }
+    // Ordena só pra escolher qual mostrar primeiro: primeiro os que dariam um aproveitamento
+    // possível (acima de 0% e até 100%), depois pelo maior. Nenhum entra no cálculo.
+    incompletos.sort((a, b) => {
+      const plausivel = (x) => (x.aproveitamentoProvavel > 0 && x.aproveitamentoProvavel <= 100 ? 1 : 0)
+      if (plausivel(a) !== plausivel(b)) return plausivel(b) - plausivel(a)
+      return (b.aproveitamentoProvavel || 0) - (a.aproveitamentoProvavel || 0)
+    })
+    return { melhor, incompletos }
+  }
+
+  const saida = []
+  for (const [cod, a] of resultado.entries()) {
+    const info = infoPorCodigo.get(cod) || {}
+    const bruto = Math.round(a.bruto * 1000000) / 1000000
+    const achado = bruto > 0 ? await acharLiquidoDoElo(cod, a.bruto) : null
+    const elo = achado ? achado.melhor : null
+    // §65: só vale como aviso quando NÃO houve elo. Achando o elo, o número está conferido e um
+    // candidato descartado no meio do caminho não interessa a ninguém.
+    const eloIncompleto = !elo && achado && achado.incompletos.length ? achado.incompletos[0] : null
+    const liquido = elo
+      ? Math.round(elo.quantidade * 1000000) / 1000000
+      : Math.round(a.liquido * 1000000) / 1000000
+    // O "fator de correção" deixa de ser um campo próprio: ele É a quantidade do insumo de origem
+    // por 1 unidade deste produto (ex.: 1,247829 kg de peça por kg de PP Filet Mignon Limpeza).
+    // Quando o produto É o próprio insumo, dá 1 naturalmente.
+    saida.push({
+      codigoEverest: cod,
+      nome: info.nome || cod,
+      unidade: info.unidade || null,
+      quantidadePorUnidade: bruto,
+      quantidadeLiquidaPorUnidade: liquido,
+      // O fator agora é o MULTIPLICADOR de verdade (bruto ÷ líquido = 1,2478), e a tela mostra o
+      // aproveitamento (80,1%). Antes aqui vinha a própria quantidade, que virava "FC 0,19".
+      fatorCorrecao: liquido > 0 ? Math.round((bruto / liquido) * 1000000) / 1000000 : null,
+      fatorOrigem: elo ? 'via_preparo' : 'insumo_direto',
+      fatorRegistrado: null,
+      percentualAproveitamentoRegistrado: liquido > 0 && bruto > 0 ? Math.round((liquido / bruto) * 1000) / 10 : null,
+      preparoIntermediario: elo ? { codigo: elo.codigo, nome: elo.nome, quantidade: liquido } : null,
+      // §65: preenchido quando o aproveitamento saiu 100% NÃO por o prato usar o insumo cru, mas
+      // porque o preparo que está ao lado dele na ficha não pôde ser conferido (ficha ausente ou
+      // vazia no banco). { codigo, nome, quantidade, motivo, aproveitamentoProvavel }.
+      eloIncompleto,
+      elosIncompletos: achado ? achado.incompletos : [],
+      terminalPorFaltaDeFicha: a.terminalPorFaltaDeFicha,
+      duplicatasPorEmpresaRemovidas: 0,
+      multiplasLinhas: false,
+      resolvidoPorCadeia: true
+    })
+  }
+  return saida
+}
+
+// 25/08/2026, pedido do Felipe (substitui o "ver transformação" do CMV Real × Teórico, que ele
+// disse não fazer sentido ali): a partir de um produto contado, listar TODA contagem registrada
+// dele — data, quem contou, quantidade — com a soma no fim. Objetivo é rastreabilidade: ver de
+// onde saiu o número que o relatório está usando, lançamento por lançamento.
+//
+// `usuario` do item (coluna criada na migration_v10) é quem de fato LANÇOU aquela linha; a sessão
+// tem seu próprio `usuario`, que é só quem ABRIU a contagem — pode ser outra pessoa. Mostra o do
+// item e cai pro da sessão só quando o item não tem (lançamento anterior à v10).
+export async function buscarContagensDoProduto(codigoEverest, { dataInicio = null, dataFim = null, grupoId = null } = {}) {
+  if (!codigoEverest) return { linhas: [], total: 0 }
+
+  const { data: produto } = await supabase
+    .from('produtos').select('id, nome, unidade_medida').eq('codigo_everest', codigoEverest).maybeSingle()
+  if (!produto) return { linhas: [], total: 0, semProduto: true }
+
+  // Nome da loja vem por join na própria consulta (`unidades(nome)`), não por uma 2ª consulta +
+  // Map — era assim antes e a coluna Loja saía vazia em todas as linhas (25/08/2026).
+  let qSessoes = supabase.from('sessoes_contagem').select('id, usuario, tipo, status, unidade_id, data_referencia, iniciada_em, unidades(nome)')
+  if (grupoId) qSessoes = qSessoes.eq('grupo_id', grupoId)
+  const { data: sessoes, error: erroSessoes } = await qSessoes
+  if (erroSessoes) throw erroSessoes
+
+  const dentroDoPeriodo = (s) => {
+    if (!dataInicio && !dataFim) return true
+    const d = dataDaSessao(s)
+    if (!d) return false
+    if (dataInicio && d < dataInicio) return false
+    if (dataFim && d > dataFim) return false
+    return true
+  }
+  const sessoesFiltradas = (sessoes || []).filter(dentroDoPeriodo)
+  if (!sessoesFiltradas.length) return { linhas: [], total: 0 }
+
+  const infoSessao = new Map(sessoesFiltradas.map((s) => [s.id, s]))
+  const itens = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('itens_contagem')
+      .select('sessao_id, quantidade, usuario, registrado_em')
+      .eq('produto_id', produto.id)
+      .in('sessao_id', lote),
+    sessoesFiltradas.map((s) => s.id)
+  )
+
+  const linhas = itens.map((it) => {
+    const s = infoSessao.get(it.sessao_id) || {}
+    return {
+      data: dataDaSessao(s) || String(it.registrado_em || '').slice(0, 10),
+      registradoEm: it.registrado_em,
+      usuario: it.usuario || s.usuario || '—',
+      loja: s.unidades?.nome || '—',
+      tipo: s.tipo || '—',
+      status: s.status || '—',
+      quantidade: Number(it.quantidade) || 0
+    }
+  }).sort((a, b) => (String(b.registradoEm || b.data)).localeCompare(String(a.registradoEm || a.data)))
+
+  return {
+    produto: { nome: produto.nome, unidade: produto.unidade_medida, codigoEverest },
+    linhas,
+    total: Math.round(linhas.reduce((a, l) => a + l.quantidade, 0) * 1000) / 1000
+  }
+}
+
+// --------------------------------------------------------------------------- A partir de 1
+// insumo em natura (ou de qualquer PP), mostra tudo que já foi registrado como "feito a partir
+// dele", em quantos níveis o Everest tiver ficha cadastrada. Pedido do Felipe (exercício da peça
+// de filet mignon → PP limpo → Medalhão/Aparas → pratos vendidos), validado com um mockup antes de
+// implementar (ver DECISOES-TRAVADAS.md).
+//
+// Modelo confirmado com o Felipe — importante, mudou depois do mockup inicial:
+// - Cada ficha registra "quanto do ingrediente-pai é preciso pra fazer 1 unidade do produto-filho"
+//   — é uma RECEITA, não um retrato de como um lote físico se repartiu de verdade. Se o mesmo
+//   código aparece como ingrediente em 2 fichas diferentes (ex.: PP Limpo usado tanto na ficha do
+//   Medalhão quanto na ficha das Aparas), são 2 USOS POSSÍVEIS registrados — ramos alternativos,
+//   cada um seu próprio caminho isolado, NÃO uma divisão simultânea do mesmo lote físico.
+// - Dentro de CADA caminho (pai → filho): a perda absorve no custo por kg — o valor total em R$
+//   se mantém igual do pai pro filho, só concentrado em menos unidades (por isso o R$/kg sobe).
+// - Fim de linha: código que nunca aparece como ingrediente de nenhuma outra ficha (prato vendido,
+//   ou insumo/PP sem uso registrado ainda).
+// - Fator ausente numa ficha (gap de cadastro, mesmo princípio de `buscarInsumosEmNatura` acima):
+//   nunca tratado como 1 escondido — o ramo vem marcado `fatorAusente: true`, sem número inventado,
+//   e a árvore não desce mais além desse ponto (sem fator, a quantidade do filho é desconhecida).
+
+const PROFUNDIDADE_MAXIMA_ARVORE_USOS = 6
+// Guarda-corpo: um insumo genérico (ex. "Sal") usado em dezenas de fichas não devia gerar uma
+// árvore gigante sem avisar — trunca e sinaliza em vez de travar a tela.
+const MAX_RAMOS_POR_NO_ARVORE_USOS = 40
+
+// Preço mais recente conhecido de compra (mesmo princípio de forward-fill já usado em
+// `buscarCMVReal`/`buscarResumoContabil`, só que pra 1 produto só, sob demanda — não precisa
+// carregar o histórico inteiro da empresa pra montar a árvore de 1 insumo).
+async function buscarCustoMedioAtual(codigoEverest) {
+  const { data: itens, error } = await supabase
+    .from('notas_importadas_itens').select('nota_id, valor_unitario, calcula_cmv').eq('codigo_everest', codigoEverest)
+  if (error) throw error
+  const validos = (itens || []).filter((i) => i.calcula_cmv !== false && i.valor_unitario != null)
+  if (!validos.length) return null
+  const idsNotas = [...new Set(validos.map((i) => i.nota_id))]
+  const notas = []
+  for (let i = 0; i < idsNotas.length; i += 300) {
+    const lote = idsNotas.slice(i, i + 300)
+    const { data, error: erroNotas } = await supabase.from('notas_importadas').select('id, data_emissao').in('id', lote)
+    if (erroNotas) throw erroNotas
+    notas.push(...(data || []))
+  }
+  const dataPorNota = new Map(notas.map((n) => [n.id, n.data_emissao]))
+  let melhor = null
+  for (const item of validos) {
+    const data = dataPorNota.get(item.nota_id)
+    if (!data) continue
+    if (!melhor || data > melhor.data) melhor = { data, preco: Number(item.valor_unitario) }
+  }
+  return melhor ? melhor.preco : null
+}
+
+// Retorna a árvore completa de usos a partir de 1 código Everest (o insumo/PP escolhido no admin).
+// `null` se o código nem existe no cadastro atual de Produtos.
+export async function buscarArvoreDeUsos(codigoEverestRaiz) {
+  if (!codigoEverestRaiz) return null
+  const { ingredientesPorFicha, codigoPorFichaId, nomePorCodigoFicha, unidadePorCodigoFicha } = await carregarFichasParaConversao()
+
+  const usosPorCodigoIngrediente = new Map()
+  for (const [fichaId, ingredientes] of ingredientesPorFicha) {
+    const codigoFilho = codigoPorFichaId.get(fichaId)
+    if (!codigoFilho) continue
+    for (const ing of ingredientes) {
+      if (!ing.codigo_everest) continue
+      if (!usosPorCodigoIngrediente.has(ing.codigo_everest)) usosPorCodigoIngrediente.set(ing.codigo_everest, [])
+      usosPorCodigoIngrediente.get(ing.codigo_everest).push({
+        codigoFilho,
+        quantidadeBaixaEstoque: Number(ing.quantidade_baixa_estoque) || 0,
+        quantidadeAplicada: Number(ing.quantidade_aplicada) || 0,
+        fatorAplicacao: Number(ing.fator_aplicacao) || 0
+      })
+    }
+  }
+
+  // Nome/unidade/categoria da raiz — pode não ter ficha própria (é insumo cru), então busca em
+  // `produtos` (cadastro atual), não em `fichas_tecnicas`.
+  const { data: raiz, error: erroRaiz } = await supabase
+    .from('produtos').select('codigo_everest, nome, unidade_medida, categoria').eq('codigo_everest', codigoEverestRaiz).maybeSingle()
+  if (erroRaiz) throw erroRaiz
+  if (!raiz) return null
+
+  const custoPorKgRaiz = await buscarCustoMedioAtual(codigoEverestRaiz)
+  const codigosVisitados = new Set([codigoEverestRaiz])
+  // 26/08/2026 (§40) — dedupe GLOBAL. A proteção contra ciclo era por CAMINHO
+  // (`caminhoAncestral`), então um código alcançável por várias rotas — e no filet mignon quase
+  // todos são, porque a ficha do Everest vem achatada — tinha a subárvore inteira reconstruída a
+  // cada rota. Resultado: "PP Picadinho Final Cozinha" e companhia repetidos dezenas de vezes, uma
+  // árvore ilegível. Agora cada código é EXPANDIDO uma vez só; nas demais ocorrências o nó aparece
+  // marcado como `jaExpandido` (mostra o item e a quantidade daquele caminho, mas não repete os
+  // descendentes).
+  const jaExpandidos = new Set()
+
+  function construir(codigoEverest, nome, unidadeMedida, quantidade, custoPorKg, profundidade, caminhoAncestral) {
+    const valorTotal = custoPorKg != null ? Math.round(quantidade * custoPorKg * 100) / 100 : null
+    const no = {
+      codigoEverest, nome, unidadeMedida,
+      quantidade: quantidade != null ? Math.round(quantidade * 10000) / 10000 : null,
+      custoPorKg: custoPorKg != null ? Math.round(custoPorKg * 100) / 100 : null,
+      valorTotal,
+      filhos: [],
+      fatorAusente: false,
+      truncadoPorProfundidade: false,
+      truncadoPorExcessoDeRamos: false
+    }
+    if (profundidade >= PROFUNDIDADE_MAXIMA_ARVORE_USOS) { no.truncadoPorProfundidade = true; return no }
+    if (caminhoAncestral.has(codigoEverest)) return no // guarda-corpo contra ciclo (não devia existir, mas não trava a tela)
+    if (jaExpandidos.has(codigoEverest)) { no.jaExpandido = true; return no }
+    jaExpandidos.add(codigoEverest)
+
+    const usos = usosPorCodigoIngrediente.get(codigoEverest) || []
+    const usosConsiderados = usos.slice(0, MAX_RAMOS_POR_NO_ARVORE_USOS)
+    no.truncadoPorExcessoDeRamos = usos.length > MAX_RAMOS_POR_NO_ARVORE_USOS
+
+    for (const uso of usosConsiderados) {
+      const nomeFilho = nomePorCodigoFicha.get(uso.codigoFilho) || uso.codigoFilho
+      const unidadeFilho = unidadePorCodigoFicha.get(uso.codigoFilho) || unidadeMedida
+      codigosVisitados.add(uso.codigoFilho)
+
+      // 26/08/2026 (§40) — FATOR DE RENDIMENTO CORRIGIDO.
+      // Estava usando `fator_aplicacao` (o FC de limpeza) ou `bruto ÷ líquido`. Nenhum dos dois
+      // converte pai em filho: o que faz isso é `quantidade_baixa_estoque` — quanto do PAI entra em
+      // 1 unidade do FILHO. Como na maioria das fichas bruto ≈ líquido, aquele cálculo dava fator 1
+      // e a quantidade saía IGUAL em todos os níveis — foi o "1,000 un" que apareceu em toda a
+      // árvore. Ex.: se "DD PR Picadinho" consome 0,2 kg de PP Picadinho, 1 kg rende 5 pratos
+      // (1 ÷ 0,2), não 1 prato.
+      const fator = uso.quantidadeBaixaEstoque > 0
+        ? uso.quantidadeBaixaEstoque
+        : (uso.quantidadeAplicada > 0 ? uso.quantidadeAplicada : null)
+
+      if (!fator || fator <= 0) {
+        no.filhos.push({
+          codigoEverest: uso.codigoFilho, nome: nomeFilho, unidadeMedida: unidadeFilho,
+          quantidade: null, custoPorKg: null, valorTotal: null, filhos: [],
+          fatorAusente: true, truncadoPorProfundidade: false, truncadoPorExcessoDeRamos: false
+        })
+        continue
+      }
+
+      const quantidadeFilho = quantidade / fator
+      const custoPorKgFilho = custoPorKg != null ? (valorTotal / quantidadeFilho) : null
+      no.filhos.push(construir(uso.codigoFilho, nomeFilho, unidadeFilho, quantidadeFilho, custoPorKgFilho, profundidade + 1, new Set([...caminhoAncestral, codigoEverest])))
+    }
+    return no
+  }
+
+  const arvore = construir(codigoEverestRaiz, raiz.nome, raiz.unidade_medida, 1, custoPorKgRaiz, 0, new Set())
+
+  // Categoria (venda/pre_preparo/insumo/...) de cada código visitado — pra tela rotular "prato
+  // vendido" vs. "PP sem próximo uso registrado" no fim de cada ramo.
+  const categoriaPorCodigo = new Map()
+  const listaCodigos = [...codigosVisitados]
+  for (let i = 0; i < listaCodigos.length; i += 300) {
+    const lote = listaCodigos.slice(i, i + 300)
+    const { data, error } = await supabase.from('produtos').select('codigo_everest, categoria').in('codigo_everest', lote)
+    if (error) throw error
+    for (const p of (data || [])) categoriaPorCodigo.set(p.codigo_everest, p.categoria)
+  }
+  function anotarCategoria(no) {
+    no.categoria = categoriaPorCodigo.get(no.codigoEverest) || null
+    no.filhos.forEach(anotarCategoria)
+  }
+  anotarCategoria(arvore)
+
+  return arvore
+}
+
+// ---------------------------------------------------------------------------
+// 20/08/2026 — Árvore de Origem: a "conta inversa" da Árvore de Usos acima, pedida pelo Felipe pra
+// mostrar pro chefe dele COMO a conta de um prato/PP é feita, voltando nível por nível até o(s)
+// insumo(s) em natura — em vez do salto direto de `buscarInsumosEmNatura` (que já achata tudo pro
+// resultado final, sem mostrar os PPs no meio do caminho).
+//
+// Diferença de modelo importante em relação à Árvore de Usos: aqui os filhos de um nó são os
+// INGREDIENTES da MESMA ficha — usados JUNTOS pra fazer o produto pai (é uma receita), não usos
+// alternativos. Por isso o valor do pai é a SOMA dos valores dos filhos (e não um valor que se
+// mantém igual, caminho por caminho, como na Árvore de Usos).
+//
+// Cuidado herdado de `buscarInsumosEmNatura`/§19.1: a mesma ficha pode trazer, lado a lado, a linha
+// de um preparo intermediário (que tem ficha própria) E a linha "achatada" do insumo em natura que
+// ele consome — são o MESMO caminho contado 2x, não 2 ingredientes diferentes. Marcado como
+// `possivelDuplicata: true` (mostrado, mas excluído da soma) em vez de escondido ou somado errado.
+const PROFUNDIDADE_MAXIMA_ARVORE_ORIGEM = 6
+
+export async function buscarArvoreDeOrigem(codigoEverestRaiz) {
+  if (!codigoEverestRaiz) return null
+  const { fichaIdPorCodigo, ingredientesPorFicha } = await carregarFichasParaConversao()
+
+  const { data: raiz, error: erroRaiz } = await supabase
+    .from('produtos').select('codigo_everest, nome, unidade_medida, categoria').eq('codigo_everest', codigoEverestRaiz).maybeSingle()
+  if (erroRaiz) throw erroRaiz
+  if (!raiz) return null
+
+  const codigosVisitados = new Set([codigoEverestRaiz])
+
+  // Mesmo padrão de `acharPreparoIntermediario` em `buscarInsumosEmNatura` (mesma limitação
+  // também: só pega duplicata de 1 nível de indireção — um preparo cuja ficha própria consome
+  // ESSA folha DIRETAMENTE. Não pega o caso de 2+ níveis, ex.: Medalhão usa PP Limpo, que por sua
+  // vez usa Filet Peça — se "Filet Peça" aparecesse achatado direto ao lado de "Medalhão" na mesma
+  // ficha, isso NÃO seria pego aqui. Mesma lacuna aceita no original; não resolvida por ora).
+  function achaPreparoQueConsomeSoEssaFolha(ingredientes, folhaCodigo) {
+    for (const outro of ingredientes) {
+      if (!outro.codigo_everest || outro.codigo_everest === folhaCodigo) continue
+      const fichaOutroId = fichaIdPorCodigo.get(outro.codigo_everest)
+      if (!fichaOutroId) continue
+      const ingredientesOutro = ingredientesPorFicha.get(fichaOutroId) || []
+      const feitoSoDessaFolha = ingredientesOutro.length > 0 && ingredientesOutro.every((i) => i.codigo_everest === folhaCodigo)
+      if (feitoSoDessaFolha) return outro
+    }
+    return null
+  }
+
+  async function construir(codigoEverest, nome, unidadeMedida, quantidade, profundidade, caminhoAncestral) {
+    const no = {
+      codigoEverest, nome, unidadeMedida,
+      quantidade: quantidade != null ? Math.round(quantidade * 10000) / 10000 : null,
+      custoPorKg: null, valorTotal: null, valorIncompleto: false,
+      filhos: [], possivelDuplicata: false, fatorAusente: false, fatorSuspeito: false,
+      truncadoPorProfundidade: false, semFichaPropria: false
+    }
+
+    if (profundidade >= PROFUNDIDADE_MAXIMA_ARVORE_ORIGEM) { no.truncadoPorProfundidade = true; return no }
+    if (caminhoAncestral.has(codigoEverest)) return no // guarda-corpo contra ciclo
+
+    const fichaId = fichaIdPorCodigo.get(codigoEverest)
+    if (!fichaId) {
+      // Sem ficha própria: fim da linha — ou é insumo em natura de verdade (esperado), ou é um "PP"
+      // sem ficha cadastrada (gap real de dado, já documentado em §19.1 — 111 casos conhecidos).
+      no.semFichaPropria = true
+      const custoPorKg = await buscarCustoMedioAtual(codigoEverest)
+      no.custoPorKg = custoPorKg != null ? Math.round(custoPorKg * 100) / 100 : null
+      no.valorTotal = (custoPorKg != null && quantidade != null) ? Math.round(quantidade * custoPorKg * 100) / 100 : null
+      no.valorIncompleto = custoPorKg == null
+      return no
+    }
+
+    const ingredientes = ingredientesPorFicha.get(fichaId) || []
+    for (const ing of ingredientes) {
+      if (!ing.codigo_everest) continue
+      const ehFolhaAqui = !fichaIdPorCodigo.get(ing.codigo_everest)
+      const preparoQueJaConsome = ehFolhaAqui ? achaPreparoQueConsomeSoEssaFolha(ingredientes, ing.codigo_everest) : null
+      codigosVisitados.add(ing.codigo_everest)
+
+      const bruto = Number(ing.quantidade_baixa_estoque) || 0
+      const liquido = Number(ing.quantidade_aplicada) || 0
+      const fatorRegistrado = Number(ing.fator_aplicacao) || 0
+      const fator = fatorRegistrado > 0 ? fatorRegistrado : (liquido > 0 ? bruto / liquido : null)
+      // 20/08/2026, achado pedindo pro Felipe validar um exemplo real (PP Filet Mignon Aparas →
+      // Limpeza → Bovino Filet Mignon Peça): ele esperava quantidade CRESCENDO nível a nível
+      // (4,00 → 4,20 → 4,60 kg) e a árvore mostrou 1kg em todo nível — ou seja, fator = 1 exato
+      // nos 2 elos. Mesmo sintoma já documentado em `MemoriaCalculoFator` (CMVSemanal.jsx): fator
+      // exatamente 1 quase sempre é sinal de bruto=líquido cadastrados iguais no Everest (lacuna),
+      // não uma perda real de 0%. Sinalizado aqui pra não passar batido como se fosse um número
+      // confirmado — a correção de verdade é no cadastro da ficha no Everest, não no código.
+      const fatorSuspeito = fator === 1
+
+      // 21/08/2026, pedido direto do Felipe: "me mostra como está aparecendo na ficha?" — ele quer
+      // ver os números CRUS cadastrados na linha da ficha (não só o resultado calculado), pra poder
+      // confrontar com o que ele espera sem precisar confiar só na minha conta. Carrego os 4 campos
+      // exatamente como estão em `fichas_tecnicas_ingredientes` pra essa linha (ficha de `no`,
+      // ingrediente = este `ing`) e devolvo junto do nó filho — a tela mostra isso lado a lado com
+      // o valor calculado, sempre (não só quando fica suspeito), pra não depender da minha inferência.
+      const cadastroNaFicha = {
+        fichaPaiNome: no.nome, fichaPaiCodigo: codigoEverest,
+        brutoCadastrado: ing.quantidade_baixa_estoque != null ? Number(ing.quantidade_baixa_estoque) : null,
+        liquidoCadastrado: ing.quantidade_aplicada != null ? Number(ing.quantidade_aplicada) : null,
+        fatorCadastrado: ing.fator_aplicacao != null ? Number(ing.fator_aplicacao) : null,
+        percentualAproveitamentoCadastrado: ing.percentual_aproveitamento != null ? Number(ing.percentual_aproveitamento) : null
+      }
+
+      if (!fator || fator <= 0) {
+        no.filhos.push({
+          codigoEverest: ing.codigo_everest, nome: ing.nome, unidadeMedida: ing.unidade_medida,
+          quantidade: null, custoPorKg: null, valorTotal: null, valorIncompleto: true, filhos: [],
+          fatorAusente: true, possivelDuplicata: !!preparoQueJaConsome, truncadoPorProfundidade: false, semFichaPropria: ehFolhaAqui,
+          cadastroNaFicha
+        })
+        continue
+      }
+
+      const quantidadeIngrediente = quantidade * fator
+      const noFilho = await construir(ing.codigo_everest, ing.nome, ing.unidade_medida, quantidadeIngrediente, profundidade + 1, new Set([...caminhoAncestral, codigoEverest]))
+      noFilho.fatorSuspeito = fatorSuspeito
+      noFilho.cadastroNaFicha = cadastroNaFicha
+      if (preparoQueJaConsome) noFilho.possivelDuplicata = true
+      no.filhos.push(noFilho)
+    }
+
+    // Valor do nó = soma dos ingredientes (usados JUNTOS, ver comentário no topo) — exclui
+    // duplicatas sinalizadas da soma (mas continua mostrando elas na árvore).
+    const filhosParaSomar = no.filhos.filter((f) => !f.possivelDuplicata)
+    const filhosComValor = filhosParaSomar.filter((f) => f.valorTotal != null)
+    no.valorIncompleto = filhosParaSomar.some((f) => f.valorTotal == null)
+    if (filhosComValor.length) {
+      no.valorTotal = Math.round(filhosComValor.reduce((s, f) => s + f.valorTotal, 0) * 100) / 100
+      no.custoPorKg = quantidade > 0 ? Math.round((no.valorTotal / quantidade) * 100) / 100 : null
+    }
+    return no
+  }
+
+  const arvore = await construir(codigoEverestRaiz, raiz.nome, raiz.unidade_medida, 1, 0, new Set())
+
+  // Categoria (venda/pre_preparo/insumo/...) de cada código visitado, mesmo propósito de sempre:
+  // rotular "prato vendido" vs. "insumo em natura" vs. "PP sem ficha (gap)" na tela.
+  const categoriaPorCodigo = new Map([[codigoEverestRaiz, raiz.categoria]])
+  const listaCodigos = [...codigosVisitados]
+  for (let i = 0; i < listaCodigos.length; i += 300) {
+    const lote = listaCodigos.slice(i, i + 300)
+    const { data, error } = await supabase.from('produtos').select('codigo_everest, categoria').in('codigo_everest', lote)
+    if (error) throw error
+    for (const p of (data || [])) categoriaPorCodigo.set(p.codigo_everest, p.categoria)
+  }
+  function anotarCategoriaOrigem(no) {
+    no.categoria = categoriaPorCodigo.get(no.codigoEverest) || null
+    no.filhos.forEach(anotarCategoriaOrigem)
+  }
+  anotarCategoriaOrigem(arvore)
+
+  return arvore
 }
 
 // Consolida a contagem semanal de 1 grupo de contagem (em qualquer loja) num dia exato: soma
@@ -4141,4 +6783,436 @@ export async function gerarBackupApp() {
     }
   }
   return { backup, resumo }
+}
+
+// ---------------------------------------------------------------------------
+// 26/08/2026 (§37), pedido do Felipe: histórico completo de UM produto, na Base de dados.
+// Junta num lugar só o que hoje está espalhado por 4 telas: compras (quantidade e preço médio),
+// consumo teórico vindo das vendas, e a conta de estoque mês a mês
+// (Est. inicial + Compras − Est. final = Consumo real, contra o Teórico).
+//
+// Granularidade: MÊS. É o recorte que o inventário usa (sessões mensais), então é o único em que
+// "Est. inicial" e "Est. final" existem de verdade. As médias por dia/semana/ano são derivadas do
+// total do período coberto — não são séries próprias, e a tela diz isso.
+// ---------------------------------------------------------------------------
+export async function buscarHistoricoDoProduto(codigoEverest) {
+  if (!codigoEverest) return null
+
+  const { data: produto } = await supabase
+    .from('produtos')
+    .select('id, codigo_everest, nome, unidade_medida, categoria, grupo_everest, subgrupo_everest')
+    .eq('codigo_everest', codigoEverest)
+    .maybeSingle()
+  if (!produto) return null
+
+  const chaveMes = (d) => String(d || '').slice(0, 7) // 'YYYY-MM'
+  const meses = new Map()
+  const garantirMes = (m) => {
+    if (!meses.has(m)) meses.set(m, { mes: m, comprasQtd: 0, comprasValor: 0, teorico: 0, estoqueInicial: null, estoqueFinal: null })
+    return meses.get(m)
+  }
+
+  // ---- COMPRAS (fonte única: "Compras no Período" do Everest, §1) --------------------
+  const notas = await buscarTodasAsLinhas(() =>
+    supabase.from('notas_importadas').select('id, data_emissao')
+  )
+  const dataDaNota = new Map((notas || []).map((n) => [n.id, n.data_emissao]))
+  const itensCompra = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('notas_importadas_itens')
+      .select('nota_id, quantidade, valor_total, calcula_cmv, codigo_everest, produto_id')
+      .eq('codigo_everest', codigoEverest)
+      .in('nota_id', lote),
+    (notas || []).map((n) => n.id)
+  )
+  let totalCompraQtd = 0
+  let totalCompraValor = 0
+  for (const it of itensCompra) {
+    if (it.calcula_cmv === false) continue // fora do custo por decisão do próprio Everest (§4)
+    const m = chaveMes(dataDaNota.get(it.nota_id))
+    if (!m) continue
+    const g = garantirMes(m)
+    const q = Number(it.quantidade) || 0
+    const v = Number(it.valor_total) || 0
+    g.comprasQtd += q
+    g.comprasValor += v
+    totalCompraQtd += q
+    totalCompraValor += v
+  }
+
+  // ---- CONSUMO TEÓRICO (vendas × fichas, convertido pro insumo) ----------------------
+  const vendas = await buscarTodasAsLinhas(() =>
+    supabase.from('vendas_importadas_itens')
+      .select('data_movimento, codigo_everest, quantidade, cancelado')
+  )
+  // Agrupa vendas por prato/mês antes de resolver ficha — evita resolver a mesma ficha N vezes.
+  const vendidoPorPratoMes = new Map()
+  for (const v of vendas) {
+    if (v.cancelado || !v.codigo_everest) continue
+    const m = chaveMes(v.data_movimento)
+    if (!m) continue
+    const k = `${v.codigo_everest}|${m}`
+    vendidoPorPratoMes.set(k, (vendidoPorPratoMes.get(k) || 0) + (Number(v.quantidade) || 0))
+  }
+  let totalTeorico = 0
+  for (const [k, qtd] of vendidoPorPratoMes) {
+    const [codigoPrato, m] = k.split('|')
+    if (codigoPrato === codigoEverest) {
+      // Revenda direta: o próprio produto foi vendido, 1 pra 1.
+      const g = garantirMes(m)
+      g.teorico += qtd
+      totalTeorico += qtd
+      continue
+    }
+    const folhas = await buscarInsumosEmNatura(codigoPrato)
+    if (!folhas) continue
+    for (const f of folhas) {
+      if (f.codigoEverest !== codigoEverest) continue
+      const g = garantirMes(m)
+      const q = qtd * (Number(f.quantidadePorUnidade) || 0)
+      g.teorico += q
+      totalTeorico += q
+    }
+  }
+
+  // ---- ESTOQUE (inventário mensal finalizado) ----------------------------------------
+  const sessoes = await buscarTodasAsLinhas(() =>
+    supabase.from('sessoes_contagem')
+      .select('id, tipo, status, mes_referencia, ano_referencia, data_referencia, iniciada_em')
+      .eq('tipo', 'mensal')
+      .eq('status', 'finalizada')
+  )
+  // Renomeado em 02/09/2026: chamava-se `mesDaSessao` e fazia shadow da função global de mesmo
+  // nome, criada agora. A lógica aqui já era a correta (mês INFORMADO primeiro) — passa a delegar
+  // pra função única, pra não haver duas definições de "qual é o mês desta sessão".
+  const mesPorSessaoId = new Map()
+  for (const ss of sessoes) {
+    const m = mesDaSessao(ss)
+    if (m) mesPorSessaoId.set(ss.id, m)
+  }
+  // 26/08/2026 (§38) — TUDO VOLTA PRO INSUMO BASE, a pedido do Felipe. Antes esta consulta somava
+  // só os lançamentos do PRÓPRIO produto (`produto_id = X`), o que subestimava o estoque de forma
+  // grave: uma peça de filet mignon que já virou "PP Aparas" ou "PP Medalhão" continua sendo filet
+  // mignon no depósito, mas não era contabilizada aqui. Agora todo produto contado é convertido
+  // pelo mesmo motor do CMV (`buscarInsumosEmNatura`) e só as parcelas que resolvem PARA ESTE
+  // insumo entram, já em quantidade bruta (fator de correção aplicado) — a mesma unidade das
+  // compras e do teórico, que é o que permite a conta fechar.
+  const itensEstoque = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('itens_contagem')
+      .select('sessao_id, quantidade, produtos(codigo_everest, categoria)')
+      .in('sessao_id', lote),
+    [...mesPorSessaoId.keys()]
+  )
+  const estoquePorMes = new Map()
+  const cacheConversao = new Map() // codigo contado -> fator pro insumo (0 = não converte)
+  const itensQueGeram = new Map() // codigo -> nome, só pra transparência na tela
+  for (const it of itensEstoque) {
+    const m = mesPorSessaoId.get(it.sessao_id)
+    const codigoContado = it.produtos?.codigo_everest
+    if (!m || !codigoContado) continue
+    const qtd = Number(it.quantidade) || 0
+    if (!qtd) continue
+
+    if (!cacheConversao.has(codigoContado)) {
+      let fator = 0
+      if (codigoContado === codigoEverest) {
+        fator = 1 // o próprio insumo base, contado direto
+      } else {
+        const folhas = await buscarInsumosEmNatura(codigoContado)
+        if (folhas) {
+          for (const f of folhas) {
+            if (f.codigoEverest === codigoEverest) fator += Number(f.quantidadePorUnidade) || 0
+          }
+        }
+      }
+      cacheConversao.set(codigoContado, fator)
+    }
+    const fator = cacheConversao.get(codigoContado)
+    if (!fator) continue
+    if (!itensQueGeram.has(codigoContado)) itensQueGeram.set(codigoContado, { codigo: codigoContado, fator })
+    estoquePorMes.set(m, (estoquePorMes.get(m) || 0) + qtd * fator)
+  }
+
+  // ---- MONTA A SÉRIE ------------------------------------------------------------------
+  for (const m of estoquePorMes.keys()) garantirMes(m)
+  const ordenados = [...meses.keys()].sort()
+  const linhas = ordenados.map((m, i) => {
+    const g = meses.get(m)
+    // Estoque final do mês = a contagem daquele mês. Estoque inicial = a do mês anterior da série.
+    const estoqueFinal = estoquePorMes.has(m) ? estoquePorMes.get(m) : null
+    const mesAnterior = i > 0 ? ordenados[i - 1] : null
+    const estoqueInicial = mesAnterior && estoquePorMes.has(mesAnterior) ? estoquePorMes.get(mesAnterior) : null
+    const temEstoque = estoqueInicial != null && estoqueFinal != null
+    const consumo = temEstoque ? estoqueInicial + g.comprasQtd - estoqueFinal : null
+    const diferenca = consumo != null ? g.teorico - consumo : null
+    const precoMedio = g.comprasQtd > 0 ? g.comprasValor / g.comprasQtd : null
+    return {
+      mes: m,
+      comprasQtd: Math.round(g.comprasQtd * 1000) / 1000,
+      comprasValor: Math.round(g.comprasValor * 100) / 100,
+      precoMedio: precoMedio != null ? Math.round(precoMedio * 100) / 100 : null,
+      teorico: Math.round(g.teorico * 1000) / 1000,
+      estoqueInicial: estoqueInicial != null ? Math.round(estoqueInicial * 1000) / 1000 : null,
+      estoqueFinal: estoqueFinal != null ? Math.round(estoqueFinal * 1000) / 1000 : null,
+      consumo: consumo != null ? Math.round(consumo * 1000) / 1000 : null,
+      diferenca: diferenca != null ? Math.round(diferenca * 1000) / 1000 : null,
+      diferencaValor: (diferenca != null && precoMedio != null) ? Math.round(diferenca * precoMedio * 100) / 100 : null
+    }
+  })
+
+  // ---- MÉDIAS DE COMPRA --------------------------------------------------------------
+  // Derivadas do período efetivamente coberto pelas compras (1ª à última), não de datas fixas —
+  // dividir por "12 meses" quando só há 4 meses de dado daria uma média artificialmente baixa.
+  const datasCompra = itensCompra
+    .filter((it) => it.calcula_cmv !== false)
+    .map((it) => dataDaNota.get(it.nota_id))
+    .filter(Boolean)
+    .sort()
+  const primeira = datasCompra[0] || null
+  const ultima = datasCompra[datasCompra.length - 1] || null
+  const dias = (primeira && ultima)
+    ? Math.max(1, Math.round((new Date(ultima) - new Date(primeira)) / 86400000) + 1)
+    : 0
+  const medias = dias > 0 ? {
+    dia: totalCompraQtd / dias,
+    semana: totalCompraQtd / (dias / 7),
+    mes: totalCompraQtd / (dias / 30.44),
+    ano: totalCompraQtd / (dias / 365.25)
+  } : null
+
+  return {
+    produto: {
+      codigoEverest: produto.codigo_everest, nome: produto.nome, unidade: produto.unidade_medida,
+      categoria: produto.categoria, grupo: produto.grupo_everest, subgrupo: produto.subgrupo_everest
+    },
+    periodoCompras: { primeira, ultima, dias },
+    // Quais produtos contados alimentam este insumo (e com que fator) — pra tela poder mostrar que
+    // o estoque não é só o item cru, mas tudo que se converte nele.
+    itensQueGeramEstoque: [...itensQueGeram.values()].sort((a, b) => b.fator - a.fator),
+    medias,
+    totais: {
+      comprasQtd: Math.round(totalCompraQtd * 1000) / 1000,
+      comprasValor: Math.round(totalCompraValor * 100) / 100,
+      precoMedio: totalCompraQtd > 0 ? Math.round((totalCompraValor / totalCompraQtd) * 100) / 100 : null,
+      teorico: Math.round(totalTeorico * 1000) / 1000
+    },
+    linhas
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 28/08/2026 (§45) — DIAGNÓSTICO DE PRATO.
+//
+// Nasceu de uma pergunta que eu não conseguia responder de fora: "o DD PR EXEC CARNE vendeu 42
+// unidades e não aparece no teórico — por quê?". Sem acesso ao banco, eu só podia listar hipóteses
+// (venda sob outro código, ficha diferente da do export, venda cancelada) e pedir pro Felipe
+// investigar. Errado: a verificação tem que estar no app.
+//
+// Esta função pega um termo de busca e devolve, para cada produto que casa, TUDO que decide se ele
+// entra ou não no consumo teórico — o cadastro, a ficha, as vendas do período e o que o motor
+// resolve — lado a lado. Serve pra qualquer prato, não só pro caso do filet.
+// ---------------------------------------------------------------------------
+export async function diagnosticarPrato(termo, { dataInicio = null, dataFim = null } = {}) {
+  const t = (termo || '').trim()
+  if (t.length < 2) return []
+
+  // 1) O que existe no CADASTRO com esse nome/código.
+  const tokens = t.split(/\s+/).filter(Boolean)
+  let q = supabase.from('produtos').select('id, codigo_everest, nome, unidade_medida, categoria, tipo_item, ativo')
+  for (const tok of tokens) q = q.or(`nome.ilike.%${tok}%,codigo_everest.ilike.%${tok}%`)
+  const { data: produtos, error } = await q.order('nome').limit(20)
+  if (error) throw error
+
+  // 2) Vendas do período — casadas por NOME também, pra pegar o caso de a venda estar gravada
+  //    sob um código diferente do que a ficha usa (uma das hipóteses do caso EXEC CARNE).
+  let qv = supabase.from('vendas_importadas_itens')
+    .select('codigo_everest, nome_original, quantidade, cancelado, data_movimento')
+  if (dataInicio) qv = qv.gte('data_movimento', dataInicio)
+  if (dataFim) qv = qv.lte('data_movimento', dataFim)
+  const vendasPeriodo = await buscarTodasAsLinhas(() => qv)
+
+  const normaliza = (s) => String(s || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  const termoNorm = normaliza(t)
+  const porNomeParecido = new Map() // codigo -> { nome, qtd, canceladas, dias }
+  const codigosDoCadastro = new Set((produtos || []).map((p) => p.codigo_everest).filter(Boolean))
+  for (const v of vendasPeriodo) {
+    const n = normaliza(v.nome_original)
+    // 28/08/2026 (§46): casa por NOME **ou por CÓDIGO**. Buscando "1826" a tela dizia "nenhuma
+    // venda" mesmo havendo 42 — porque só comparava o termo contra o nome da venda. Falso negativo
+    // no exato momento em que a resposta importava.
+    const casaCodigo = (v.codigo_everest && (v.codigo_everest === t || codigosDoCadastro.has(v.codigo_everest)))
+    const casaNome = tokens.every((tok) => n.includes(normaliza(tok))) || n.includes(termoNorm)
+    if (!casaCodigo && !casaNome) continue
+    const k = v.codigo_everest || '(sem código)'
+    if (!porNomeParecido.has(k)) porNomeParecido.set(k, { codigo: k, nome: v.nome_original, qtd: 0, canceladas: 0, dias: new Set() })
+    const g = porNomeParecido.get(k)
+    if (v.cancelado) g.canceladas += Number(v.quantidade) || 0
+    else { g.qtd += Number(v.quantidade) || 0; g.dias.add(String(v.data_movimento).slice(0, 10)) }
+  }
+  const vendasPorCodigo = [...porNomeParecido.values()]
+    .map((g) => ({ ...g, dias: g.dias.size }))
+    .sort((a, b) => b.qtd - a.qtd)
+
+  // 3) Para cada produto: ficha, ingredientes e o que o motor resolve.
+  const { fichaIdPorCodigo, ingredientesPorFicha } = await carregarFichasParaConversao()
+  const linhas = []
+  for (const p of (produtos || [])) {
+    const fichaId = fichaIdPorCodigo.get(p.codigo_everest)
+    const ingredientes = fichaId ? (ingredientesPorFicha.get(fichaId) || []) : []
+    let resolvido = null
+    if (p.categoria === 'insumo' && !fichaId) {
+      // 09/09/2026, correção de bug: a versão anterior aplicava essa regra pra QUALQUER
+      // categoria='insumo', mesmo quando o item TINHA ficha própria (ex.: "DD PR ALIGOT COM
+      // FILET" é categoria='insumo' — é um prato vendido — mas tem ficha de 40 linhas). Isso
+      // fazia a tela mostrar "resolve pra ele mesmo" em vez de abrir a ficha de verdade,
+      // escondendo justamente o caso que essa tela existe pra investigar. A regra só faz sentido
+      // quando NÃO existe ficha pra abrir (matéria-prima comprada, ou revenda direta como o
+      // vinho que motivou a correção original).
+      resolvido = [{
+        codigoEverest: p.codigo_everest, nome: p.nome, unidade: p.unidade_medida,
+        quantidadePorUnidade: 1, terminalPorFaltaDeFicha: false, eloIncompleto: null
+      }]
+    } else {
+      try { resolvido = await buscarInsumosEmNatura(p.codigo_everest) } catch { resolvido = null }
+    }
+
+    const vendaDoCodigo = porNomeParecido.get(p.codigo_everest) || null
+    // Diagnóstico em uma frase — a razão pela qual entra ou não no teórico.
+    let veredito
+    if (!fichaId && p.categoria !== 'insumo') veredito = 'SEM FICHA TÉCNICA — nunca gera consumo teórico'
+    else if (!resolvido || !resolvido.length) veredito = 'Tem ficha, mas nenhum ingrediente dela chega a um insumo comprado'
+    else if (!vendaDoCodigo || vendaDoCodigo.qtd <= 0) {
+      // 09/09/2026: item categoria 'pre_preparo' NUNCA tem venda própria por desenho — só é
+      // consumido como ingrediente dentro da ficha de um prato final (ex.: "PP PICADINHO FINAL
+      // PRODUCAO" não é vendido no caixa, só "DD PR PICADINHO" é). O veredito vermelho de "sem
+      // venda" fazia esse caso ler como problema quando é o esperado. Categoria != pre_preparo
+      // continua vermelho — aí sim é sinal de item cadastrado como prato vendável que não vendeu.
+      veredito = p.categoria === 'pre_preparo'
+        ? 'OK — é pré-preparo, não tem venda própria por natureza; consumo entra pelo prato final que o usa'
+        : (p.categoria === 'insumo' && !fichaId
+            ? 'OK — insumo comprado direto, resolve pra ele mesmo; sem venda registrada nesse código/período'
+            : 'Tem ficha e resolve, mas NÃO tem venda registrada nesse código/período')
+    }
+    else veredito = 'OK — tem ficha, resolve e tem venda no período'
+
+    linhas.push({
+      codigoEverest: p.codigo_everest,
+      nome: p.nome,
+      unidade: p.unidade_medida,
+      categoria: p.categoria,
+      tipoItem: p.tipo_item,
+      ativo: p.ativo,
+      temFicha: !!fichaId,
+      totalIngredientes: ingredientes.length,
+      ingredientes: ingredientes.map((i) => ({
+        codigo: i.codigo_everest, nome: i.nome, tipoItem: i.tipo_item,
+        bruto: i.quantidade_baixa_estoque, liquido: i.quantidade_aplicada
+      })),
+      insumosResolvidos: (resolvido || []).map((r) => ({
+        codigo: r.codigoEverest, nome: r.nome, quantidadePorUnidade: r.quantidadePorUnidade,
+        terminalPorFaltaDeFicha: r.terminalPorFaltaDeFicha,
+        // 09/09/2026: `buscarInsumosEmNatura` já calcula isso (§65) mas essa função descartava o
+        // campo antes de devolver — o próprio Diagnóstico de prato, feito pra conferir exatamente
+        // esse tipo de coisa, não conseguia mostrar o aviso que motivou construí-lo.
+        eloIncompleto: r.eloIncompleto || null
+      })),
+      venda: vendaDoCodigo ? { qtd: vendaDoCodigo.qtd, canceladas: vendaDoCodigo.canceladas, dias: vendaDoCodigo.dias.size ?? vendaDoCodigo.dias } : null,
+      veredito
+    })
+  }
+
+  return { linhas, vendasPorCodigo, periodo: { dataInicio, dataFim } }
+}
+
+// ── LANÇAMENTOS (tabela dinâmica) ────────────────────────────────────────────
+// 01/09/2026, pedido do Felipe: "inventário tem mais de 30 sessões lançadas de agosto... preciso
+// ver isso de forma fácil e agrupada... é possível o usuário montar da forma que ele quiser e
+// exportar?"
+//
+// Contexto que define o desenho: lançar em VÁRIAS sessões é o comportamento normal aqui — a
+// pessoa lança um pedaço, envia, e depois lança outros itens numa sessão nova. Isso é aditivo, não
+// é erro (§19.3: "soma sempre, toda contagem física de gente diferente é aditiva"). Logo a SESSÃO
+// não pode ser a unidade de análise; ela é só mais uma dimensão disponível.
+//
+// Esta função devolve as linhas CRUAS, uma por lançamento, com todas as dimensões já resolvidas.
+// O agrupamento acontece na tela, client-side, porque é lá que o Felipe escolhe como quer ver —
+// fazer o pivô no banco exigiria uma consulta diferente por combinação.
+export async function buscarLancamentos({ tipos, dataInicio, dataFim, unidadeId, usuario, grupoId } = {}) {
+  const base = 'id, tipo, status, usuario, mes_referencia, ano_referencia, iniciada_em, unidade_id, grupo_id, unidades(nome), grupos_contagem(nome)'
+  // `data_referencia` (v4) e `turno` (v13) dependem de migração. Tenta da consulta mais completa
+  // pra mais enxuta — nunca deixa a tela vazia só porque uma migração ficou pendente (mesmo
+  // padrão de `listarSessoes`).
+  let sessoes = null
+  for (const extras of [`${base}, data_referencia, turno`, `${base}, data_referencia`, base]) {
+    let q = supabase.from('sessoes_contagem').select(extras)
+    if (tipos?.length) q = q.in('tipo', tipos)
+    if (unidadeId) q = q.eq('unidade_id', unidadeId)
+    if (grupoId) q = q.eq('grupo_id', grupoId)
+    const { data, error } = await q
+    if (!error) { sessoes = data; break }
+    if (!colunaNaoExiste(error)) throw error
+  }
+
+  sessoes = (sessoes || []).filter((s) => {
+    if (tipos?.length && !tipos.includes(s.tipo)) return false
+    if (unidadeId && s.unidade_id !== unidadeId) return false
+    if (grupoId && s.grupo_id !== grupoId) return false
+    const d = dataDaSessao(s)
+    if (dataInicio && (!d || d < dataInicio)) return false
+    if (dataFim && (!d || d > dataFim)) return false
+    return true
+  })
+  if (!sessoes.length) return []
+
+  const porId = new Map(sessoes.map((s) => [s.id, s]))
+  // Lotes de 300: a lista de ids cresce com o período e um `.in()` sem paginar já estourou o
+  // limite de URL do PostgREST três vezes neste app (§10, §22.1, §25.1).
+  let itens = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('itens_contagem')
+      .select('id, sessao_id, produto_id, quantidade, usuario, registrado_em, motivo_perda, modo_perda, produtos(nome, codigo_everest, unidade_medida, grupo_everest, subgrupo_everest, tipo_item)')
+      .in('sessao_id', lote),
+    sessoes.map((s) => s.id)
+  ).catch(async (error) => {
+    if (!colunaNaoExiste(error)) throw error
+    return buscarPorIdsEmLotes(
+      (lote) => supabase.from('itens_contagem')
+        .select('id, sessao_id, produto_id, quantidade, usuario, registrado_em, produtos(nome, codigo_everest, unidade_medida, grupo_everest, subgrupo_everest, tipo_item)')
+        .in('sessao_id', lote),
+      sessoes.map((s) => s.id)
+    )
+  })
+
+  const linhas = []
+  for (const it of itens) {
+    const s = porId.get(it.sessao_id)
+    if (!s) continue
+    const data = dataDaSessao(s)
+    // Quem lançou o ITEM manda; a sessão é o fallback (itens gravados antes da migration_v10 não
+    // têm usuário próprio).
+    if (usuario && (it.usuario || s.usuario) !== usuario) continue
+    linhas.push({
+      itemId: it.id,
+      sessaoId: s.id,
+      tipo: s.tipo,
+      status: s.status,
+      data,
+      // Mês de REFERÊNCIA (o informado), não o mês em que a linha foi digitada.
+      mes: mesDaSessao(s) || '—',
+      origemData: origemDaDataDaSessao(s),
+      turno: s.turno || null,
+      loja: s.unidades?.nome || '—',
+      grupoContagem: s.grupos_contagem?.nome || '—',
+      quem: it.usuario || s.usuario || '—',
+      codigoEverest: it.produtos?.codigo_everest || '—',
+      produto: it.produtos?.nome || '(produto removido)',
+      unidade: it.produtos?.unidade_medida || '',
+      grupoEverest: it.produtos?.grupo_everest || '—',
+      subgrupoEverest: it.produtos?.subgrupo_everest || '—',
+      tipoItem: it.produtos?.tipo_item || '—',
+      motivoPerda: it.motivo_perda || null,
+      modoPerda: it.modo_perda || null,
+      quantidade: Number(it.quantidade) || 0,
+      registradoEm: it.registrado_em
+    })
+  }
+  return linhas
 }

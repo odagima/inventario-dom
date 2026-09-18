@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { listarSessoes, buscarRelatorioSessao, atualizarReferenciaSessao, atualizarDataReferenciaSessao, atualizarUnidadeSessao, apagarSessao, reabrirSessao, listarUnidadesAdmin, buscarDadosParaExportEverest, buscarResumoParaExportEverest } from '../lib/adminApi'
+import { editarQuantidadeItemContagem, listarSessoes, buscarRelatorioSessao, atualizarReferenciaSessao, atualizarDataReferenciaSessao, atualizarTurnoSessao, atualizarUnidadeSessao, apagarSessao, reabrirSessao, finalizarSessaoAdmin, listarUnidadesAdmin, buscarDadosParaExportEverest, buscarResumoParaExportEverest } from '../lib/adminApi'
 import { registrarSaidaContagem, listarSaidasDaSessao, removerSaidaContagem } from '../../lib/api'
+import { useEscParaFechar } from '../lib/hooks'
+import { LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../../lib/perdas'
 
 const LABEL_STATUS = { contado: 'Contado', pendente: 'Pendente', extra: 'Fora da lista' }
 const LABEL_TIPO = {
@@ -24,7 +26,8 @@ function ItemSessao({ s, onAbrir, dataDaSessao }) {
       <div>
         <p style={{ margin: 0 }}>{nomePrincipal}</p>
         <p className="muted" style={{ margin: 0 }}>
-          {LABEL_TIPO[s.tipo] || s.tipo} · {dataDaSessao(s)} · {s.usuario}
+          {LABEL_TIPO[s.tipo] || s.tipo} · {dataDaSessao(s)}
+          {s.turno && ` · ${LABEL_TURNO[s.turno] || s.turno}`} · {s.usuario}
           {s.tipo === 'mensal' && s.mes_referencia && ` · ref. ${String(s.mes_referencia).padStart(2, '0')}/${s.ano_referencia}`}
         </p>
       </div>
@@ -59,6 +62,8 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
   const [saidaQtd, setSaidaQtd] = useState('')
   const [saidaMotivo, setSaidaMotivo] = useState('')
   const [salvandoSaida, setSalvandoSaida] = useState(false)
+
+  useEscParaFechar(!!saidaItem, () => { if (!salvandoSaida) setSaidaItem(null) })
 
   // Mês/ano de referência da sessão pra fins de agrupamento — com fallback, porque sessão
   // antiga (de antes desse campo existir, ou sem ele preenchido por algum motivo) não pode
@@ -95,8 +100,12 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
       .map((g) => ({ ...g, porLoja: Array.from(g.porLoja.entries()).sort((a, b) => a[0].localeCompare(b[0])) }))
   }, [sessoes, tipoFiltro])
 
+  // Mesma correção: a referência informada manda. Sessão mensal cai no dia 1º do mês de
+  // referência (representa o mês, não o dia da digitação).
   function dataDaSessaoChave(s) {
-    return s.data_referencia || (s.iniciada_em ? String(s.iniciada_em).slice(0, 10) : null)
+    if (s.data_referencia) return s.data_referencia
+    if (s.mes_referencia && s.ano_referencia) return `${s.ano_referencia}-${String(s.mes_referencia).padStart(2, '0')}-01`
+    return s.iniciada_em ? String(s.iniciada_em).slice(0, 10) : null
   }
 
   // Contagem semanal: agrupa por Grupo de contagem (A-Z) e, dentro do grupo, pela data exata da
@@ -121,8 +130,16 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
       }))
   }, [sessoes, tipoFiltro])
 
+  // 02/09/2026: mostrava `iniciada_em` (o dia em que a pessoa DIGITOU) sempre que não havia
+  // `data_referencia` — que é o caso de TODO inventário mensal, já que ele só informa mês e ano.
+  // Resultado: um inventário de agosto lançado em 2 de setembro aparecia como "02/09/2026", como
+  // se a contagem tivesse sido feita nesse dia. Agora a sessão mensal mostra o mês de referência,
+  // e o dia da digitação só aparece quando não há nenhuma referência informada — rotulado como
+  // tal, pra ninguém confundir com a data da contagem.
   function dataDaSessao(s) {
-    return s.data_referencia ? new Date(s.data_referencia + 'T00:00:00').toLocaleDateString('pt-BR') : new Date(s.iniciada_em).toLocaleDateString('pt-BR')
+    if (s.data_referencia) return new Date(s.data_referencia + 'T00:00:00').toLocaleDateString('pt-BR')
+    if (s.mes_referencia && s.ano_referencia) return `${String(s.mes_referencia).padStart(2, '0')}/${s.ano_referencia}`
+    return `lançado em ${new Date(s.iniciada_em).toLocaleDateString('pt-BR')}`
   }
 
   async function carregarSessoes() {
@@ -137,6 +154,22 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
   }
 
   useEffect(() => { carregarSessoes() }, [])
+
+  // 27/08/2026 (§42): edição inline da quantidade de um lançamento.
+  const [editandoItem, setEditandoItem] = useState(null)
+  const [qtdEditada, setQtdEditada] = useState('')
+  const [erroEdicao, setErroEdicao] = useState('')
+
+  async function salvarQuantidade(l) {
+    setErroEdicao('')
+    try {
+      await editarQuantidadeItemContagem(l.id, String(qtdEditada).replace(',', '.'))
+      setEditandoItem(null)
+      await abrirSessao(sessaoAberta) // recarrega o relatório com o valor novo
+    } catch (e) {
+      setErroEdicao(e.message)
+    }
+  }
 
   async function abrirSessao(sessao) {
     setSessaoAberta(sessao)
@@ -174,22 +207,33 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
     }
   }
 
+  // 17/08/2026, pedido do Felipe: o Excel exportado precisa trazer a DATA DE REFERÊNCIA da
+  // contagem (o dia real que ela representa, não quando foi lançada no sistema) — tanto como
+  // coluna dentro da planilha quanto no nome do arquivo. Antes, o nome do arquivo usava
+  // `iniciada_em` (timestamp de quando a sessão foi criada no banco); `dataDaSessaoChave` já
+  // existe mais abaixo pra isso (prioriza `data_referencia`, cai pra `iniciada_em` só quando não
+  // tem — sessão de tipo sem data escolhida, ex. Inventário geral).
   function exportarExcel() {
+    const dataReferenciaArquivo = dataDaSessaoChave(sessaoAberta)
     const planilha = XLSX.utils.json_to_sheet(
       linhas
         .filter((l) => l.status === 'contado' || l.status === 'extra')
         .map((l) => ({
+        'Data de referência': dataReferenciaArquivo || '',
         Produto: l.nome,
         'Código Everest': l.codigo_everest || '',
         Unidade: l.unidade_medida,
         Quantidade: l.quantidade ?? '',
-        Status: LABEL_STATUS[l.status]
+        Motivo: l.motivo_perda ? (LABEL_MOTIVO_PERDA[l.motivo_perda] || l.motivo_perda) : '',
+        'Lançado como': l.modo_perda === 'prato' ? 'Prato inteiro (porções)' : l.modo_perda === 'peso' ? 'Peso' : '',
+        Status: LABEL_STATUS[l.status],
+        'Lançado por': l.usuario || '',
+        'Lançado em': l.registrado_em ? new Date(l.registrado_em).toLocaleString('pt-BR') : ''
       }))
     )
     const livro = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(livro, planilha, 'Contagem')
-    const dataArquivo = new Date(sessaoAberta.iniciada_em).toISOString().slice(0, 10)
-    XLSX.writeFile(livro, `contagem-${sessaoAberta.unidades?.nome || 'unidade'}-${dataArquivo}.xlsx`)
+    XLSX.writeFile(livro, `contagem-${sessaoAberta.unidades?.nome || sessaoAberta.grupos_contagem?.nome || 'unidade'}-${dataReferenciaArquivo}.xlsx`)
   }
 
   async function handleTrocarLoja(novaUnidadeId) {
@@ -287,7 +331,12 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
           <button onClick={() => setSessaoAberta(null)} style={{ padding: '4px 8px', fontSize: 12 }}>voltar</button>
         </div>
         <p className="muted" style={{ margin: '0 0 14px' }}>
-          {LABEL_TIPO[sessaoAberta.tipo] || sessaoAberta.tipo} · {dataDaSessao(sessaoAberta)} · {sessaoAberta.usuario}
+          {LABEL_TIPO[sessaoAberta.tipo] || sessaoAberta.tipo} · {dataDaSessao(sessaoAberta)} · iniciada por {sessaoAberta.usuario}
+          {/* 17/08/2026: só mostra "enviada por" quando é diferente de quem abriu — sinal de que outra
+              pessoa continuou/enviou a sessão (ver migration_v10.sql, usuario_finalizou). */}
+          {sessaoAberta.usuario_finalizou && sessaoAberta.usuario_finalizou !== sessaoAberta.usuario && (
+            <> · <span style={{ color: 'var(--warning)' }}>enviada por {sessaoAberta.usuario_finalizou}</span></>
+          )}
         </p>
 
         <div style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 12, marginBottom: 16 }}>
@@ -300,9 +349,11 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                 {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
               </select>
             </div>
-            {sessaoAberta.tipo === 'semanal' && (
+            {/* 28/08/2026: perdas entrou aqui junto com a semanal — as duas representam um DIA
+                específico, então a data é o dado que precisa ser corrigível depois do fato. */}
+            {(sessaoAberta.tipo === 'semanal' || sessaoAberta.tipo === 'perdas') && (
               <div style={{ flex: 1 }}>
-                <label className="muted">Data da contagem</label>
+                <label className="muted">{sessaoAberta.tipo === 'perdas' ? 'Data do ocorrido' : 'Data da contagem'}</label>
                 <input
                   type="date"
                   value={sessaoAberta.data_referencia || ''}
@@ -316,6 +367,28 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                     }
                   }}
                 />
+              </div>
+            )}
+            {sessaoAberta.tipo === 'perdas' && (
+              <div style={{ flex: 1 }}>
+                <label className="muted">Turno</label>
+                <select
+                  value={sessaoAberta.turno || ''}
+                  onChange={async (e) => {
+                    const novoTurno = e.target.value
+                    try {
+                      await atualizarTurnoSessao(sessaoAberta.id, novoTurno)
+                      setSessaoAberta((prev) => ({ ...prev, turno: novoTurno }))
+                    } catch (err) {
+                      alert(err.message)
+                    }
+                  }}
+                >
+                  <option value="">— não informado —</option>
+                  {Object.entries(LABEL_TURNO).map(([valor, label]) => (
+                    <option key={valor} value={valor}>{label}</option>
+                  ))}
+                </select>
               </div>
             )}
           </div>
@@ -372,16 +445,56 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
 
             <button onClick={exportarExcel} style={{ width: '100%', marginBottom: 14 }}>Exportar Excel</button>
 
-            <p className="muted" style={{ marginBottom: 6 }}>Itens contados</p>
+            <p className="muted" style={{ marginBottom: 6 }}>
+              Itens contados <span style={{ fontSize: 11 }}>· clique na quantidade para corrigir</span>
+            </p>
+            {erroEdicao && <p style={{ margin: '0 0 8px', color: 'var(--danger)', fontSize: 12 }}>{erroEdicao}</p>}
             <div style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 16 }}>
               {linhas.filter((l) => l.status === 'contado' || l.status === 'extra').map((l, i) => (
                 <div key={i} className="list-item">
                   <div>
                     <p style={{ margin: 0 }}>{l.nome}</p>
-                    <p className="muted" style={{ margin: 0 }}>Everest {l.codigo_everest || '—'}</p>
+                    <p className="muted" style={{ margin: 0 }}>
+                      Everest {l.codigo_everest || '—'}
+                      {/* 17/08/2026: quem lançou + quando (migration_v10.sql) — só aparece pra itens já
+                          gravados depois da migração; contagens antigas mostram só o código Everest. */}
+                      {/* 28/08/2026: motivo da perda (migration_v13.sql). Só existe em sessão tipo
+                          'perdas'; em contagem/inventário vem nulo e nada muda. */}
+                      {l.motivo_perda && ` · ${LABEL_MOTIVO_PERDA[l.motivo_perda] || l.motivo_perda}`}
+                      {l.modo_perda === 'prato' && ' · prato inteiro'}
+                      {l.usuario && ` · ${l.usuario}`}
+                      {l.registrado_em && ` · ${new Date(l.registrado_em).toLocaleString('pt-BR')}`}
+                    </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {l.quantidade !== null && <span>{l.quantidade} {l.unidade_medida}</span>}
+                    {editandoItem === l.id ? (
+                      <>
+                        <input
+                          value={qtdEditada}
+                          onChange={(e) => setQtdEditada(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') salvarQuantidade(l)
+                            if (e.key === 'Escape') setEditandoItem(null)
+                          }}
+                          autoFocus
+                          style={{ width: 90, textAlign: 'right' }}
+                        />
+                        <span className="muted" style={{ fontSize: 12 }}>{l.unidade_medida}</span>
+                        <button className="primary" onClick={() => salvarQuantidade(l)} style={{ padding: '4px 9px', fontSize: 12 }}>Salvar</button>
+                        <button onClick={() => setEditandoItem(null)} style={{ padding: '4px 9px', fontSize: 12 }}>Cancelar</button>
+                      </>
+                    ) : (
+                      <>
+                        {l.quantidade !== null && (
+                          <button
+                            onClick={() => { setEditandoItem(l.id); setQtdEditada(String(l.quantidade)); setErroEdicao('') }}
+                            title="Editar a quantidade contada"
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: l.id ? 'pointer' : 'default', textDecoration: l.id ? 'underline dotted' : 'none', fontSize: 13 }}
+                            disabled={!l.id}
+                          >
+                            {l.quantidade} {l.unidade_medida}
+                          </button>
+                        )}
                     <span className="badge" style={{
                       background: l.status === 'contado' ? 'rgba(48,209,88,0.16)' : l.status === 'pendente' ? 'rgba(255,159,10,0.16)' : 'rgba(10,132,255,0.16)',
                       color: l.status === 'contado' ? 'var(--success)' : l.status === 'pendente' ? 'var(--warning)' : '#6cb2ff'
@@ -394,6 +507,8 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                     >
                       Saída
                     </button>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
@@ -440,6 +555,20 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                 style={{ width: '100%', marginBottom: 10 }}
               >
                 Reabrir essa contagem (deixa continuar lançando)
+              </button>
+            )}
+
+            {/* 09/09/2026, pedido do Felipe: caminho inverso do "Reabrir" acima — pra sessão
+                travada em 'em andamento' (esqueceram de finalizar, celular trocado, ninguém vai
+                voltar nela). Sem isso ela ficava contando pra sempre nos relatórios de CMV Semanal
+                e Consolidado (§ investigação do filet mignon, 09/09) até alguém excluir os dados
+                inteiros — o que jogaria fora a contagem física de verdade que já foi feita. */}
+            {sessaoAberta.status === 'em_andamento' && (
+              <button
+                onClick={async () => { await finalizarSessaoAdmin(sessaoAberta.id); setSessaoAberta((prev) => ({ ...prev, status: 'finalizada' })) }}
+                style={{ width: '100%', marginBottom: 10 }}
+              >
+                Finalizar essa contagem (estava travada em andamento)
               </button>
             )}
 

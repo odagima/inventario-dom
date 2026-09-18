@@ -3,6 +3,8 @@ import {
   listarGruposAdmin,
   criarGrupo,
   deletarGrupo,
+  editarNomeGrupo,
+  ativarDesativarGrupo,
   listarItensDoGrupoAdmin,
   adicionarItemGrupo,
   removerItemGrupo,
@@ -17,6 +19,12 @@ export default function Grupos() {
   const [buscaItem, setBuscaItem] = useState('')
   const [resultadosBusca, setResultadosBusca] = useState([])
   const [carregando, setCarregando] = useState(true)
+  // 03/09/2026 (§26.3, reposto): editar nome e ativar/desativar. O `adminApi` já tinha
+  // `editarNomeGrupo` e `ativarDesativarGrupo` desde 24/08, mas esta tela não chamava nenhuma das
+  // duas — a versão do repositório é anterior a essa entrega (ver §74).
+  const [editandoId, setEditandoId] = useState(null)
+  const [nomeEditado, setNomeEditado] = useState('')
+  const [erro, setErro] = useState('')
   const debounceRef = useRef(null)
 
   useEffect(() => { carregarGrupos() }, [])
@@ -44,9 +52,42 @@ export default function Grupos() {
   }
 
   async function handleDeletarGrupo(grupoId) {
-    await deletarGrupo(grupoId)
-    if (grupoAberto?.id === grupoId) setGrupoAberto(null)
-    await carregarGrupos()
+    // `deletarGrupo` recusa quando o grupo já tem contagem (§26.3) — antes a FK só desvinculava a
+    // sessão em silêncio. A mensagem vem do próprio adminApi e precisa aparecer na tela.
+    setErro('')
+    try {
+      await deletarGrupo(grupoId)
+      if (grupoAberto?.id === grupoId) setGrupoAberto(null)
+      await carregarGrupos()
+    } catch (e) {
+      setErro(e.message)
+    }
+  }
+
+  async function salvarNome(grupoId) {
+    const nome = nomeEditado.trim()
+    if (!nome) return
+    setErro('')
+    try {
+      await editarNomeGrupo(grupoId, nome)
+      setEditandoId(null)
+      if (grupoAberto?.id === grupoId) setGrupoAberto((g) => ({ ...g, nome }))
+      await carregarGrupos()
+    } catch (e) {
+      setErro(e.message)
+    }
+  }
+
+  async function alternarAtivo(grupo) {
+    setErro('')
+    try {
+      await ativarDesativarGrupo(grupo.id, !grupo.ativo)
+      await carregarGrupos()
+    } catch (e) {
+      // Sem a migration_v12 a coluna `ativo` não existe — o adminApi devolve o texto dizendo
+      // exatamente qual migração rodar, então basta mostrá-lo.
+      setErro(e.message)
+    }
   }
 
   useEffect(() => {
@@ -130,18 +171,47 @@ export default function Grupos() {
         <button className="primary" onClick={handleCriarGrupo} style={{ flexShrink: 0 }}>Criar</button>
       </div>
 
+      {erro && (
+        <p style={{ color: 'var(--danger)', fontSize: 12.5, margin: '0 0 12px' }}>{erro}</p>
+      )}
+
       {carregando ? (
         <p className="muted">Carregando…</p>
       ) : grupos.length === 0 ? (
         <p className="muted">Nenhum grupo criado ainda.</p>
       ) : (
         grupos.map((g) => (
-          <div key={g.id} className="list-item">
-            <div style={{ cursor: 'pointer' }} onClick={() => abrirGrupo(g)}>
-              <p style={{ margin: 0 }}>{g.nome}</p>
-              <p className="muted" style={{ margin: 0 }}>{g.totalItens} {g.totalItens === 1 ? 'item' : 'itens'}</p>
-            </div>
-            <button onClick={() => handleDeletarGrupo(g.id)} style={{ padding: '4px 8px', fontSize: 12 }}>Excluir</button>
+          <div key={g.id} className="list-item" style={{ opacity: g.ativo ? 1 : 0.55 }}>
+            {editandoId === g.id ? (
+              <div style={{ display: 'flex', gap: 6, flex: 1, alignItems: 'center' }}>
+                <input
+                  value={nomeEditado}
+                  onChange={(e) => setNomeEditado(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') salvarNome(g.id); if (e.key === 'Escape') setEditandoId(null) }}
+                  autoFocus
+                />
+                <button className="primary" onClick={() => salvarNome(g.id)} style={{ padding: '4px 10px', fontSize: 12, flexShrink: 0 }}>Salvar</button>
+                <button onClick={() => setEditandoId(null)} style={{ padding: '4px 8px', fontSize: 12, flexShrink: 0 }}>Cancelar</button>
+              </div>
+            ) : (
+              <>
+                <div style={{ cursor: 'pointer', minWidth: 0 }} onClick={() => abrirGrupo(g)}>
+                  <p style={{ margin: 0 }}>
+                    {g.nome}
+                    {!g.ativo && <span className="muted" style={{ fontSize: 11 }}> · inativo</span>}
+                  </p>
+                  <p className="muted" style={{ margin: 0 }}>{g.totalItens} {g.totalItens === 1 ? 'item' : 'itens'}</p>
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                  <label className="muted" style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 4 }} title="Grupo ativo (aparece nos filtros de contagem)">
+                    <input type="checkbox" checked={!!g.ativo} onChange={() => alternarAtivo(g)} />
+                    ativo
+                  </label>
+                  <button onClick={() => { setEditandoId(g.id); setNomeEditado(g.nome); setErro('') }} style={{ padding: '4px 8px', fontSize: 12 }}>Renomear</button>
+                  <button onClick={() => handleDeletarGrupo(g.id)} style={{ padding: '4px 8px', fontSize: 12 }}>Excluir</button>
+                </div>
+              </>
+            )}
           </div>
         ))
       )}

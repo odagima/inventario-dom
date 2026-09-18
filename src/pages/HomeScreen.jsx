@@ -1,4 +1,4 @@
-export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarProdutividade, onAbrirCadastro, onAbrirAdmin, onSair }) {
+export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarProducao, onEntrarProdutividade, onAbrirCadastro, onAbrirAdmin, onSair }) {
   const nivel = usuarioLogado.nivelAcesso
   const podeCadastro = nivel === 'administrativo' || nivel === 'estoque_compras'
   const podeAdmin = nivel === 'administrativo'
@@ -13,6 +13,9 @@ export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarPr
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <button className="primary" style={{ padding: '18px', fontSize: 16 }} onClick={onEntrarContagem}>
           Contagem
+        </button>
+        <button style={{ padding: '18px', fontSize: 16 }} onClick={onEntrarProducao}>
+          Produção
         </button>
         <button style={{ padding: '18px', fontSize: 16 }} onClick={onEntrarProdutividade}>
           Produtividade
