@@ -256,9 +256,13 @@ function MediaMovelFaturamento({ dados }) {
             {/* 09/09/2026: cores trocadas — `var(--accent)` (barra) e `var(--danger)` (linha)
                 estavam saindo no mesmo tom nesta paleta (os dois são tons quentes). Passou a usar
                 hex fixo da paleta Grupo DOM (§14 do doc de decisões): barra em laranja, linha em
-                azul marinho — contraste garantido, não depende de como `--danger` está definido. */}
-            <Bar dataKey="faturamento" name="Faturamento do dia" fill="var(--dom-laranja)" radius={[6, 6, 1, 1]} activeBar={{ fillOpacity: 0.85 }} />
-            <Line type="monotone" dataKey="media" name="Média móvel (7d)" stroke="var(--accent-cool)" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+                azul marinho — contraste garantido, não depende de como `--danger` está definido.
+                18/09/2026, pedido do Felipe: laranja saturado demais deixava a linha "sumindo" por
+                cima. Suavizou bastante a barra (fillOpacity 0.5) e engrossou a linha, sem trocar
+                os tokens de cor (mantém o laranja como identidade — ver comentário em styles.css
+                §"protagonista"). */}
+            <Bar dataKey="faturamento" name="Faturamento do dia" fill="var(--dom-laranja)" fillOpacity={0.5} radius={[6, 6, 1, 1]} activeBar={{ fillOpacity: 0.75 }} />
+            <Line type="monotone" dataKey="media" name="Média móvel (7d)" stroke="var(--accent-cool)" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -288,8 +292,8 @@ function TendenciaPainel({ dados }) {
               contentStyle={{ background: 'var(--header-bg)', border: '0.5px solid rgba(244,241,233,0.15)', borderRadius: 8, color: 'var(--header-text)' }}
               formatter={(value, name) => (name === 'CMV Real %' ? [formatarPercentual(value), name] : [formatarMoeda(value), name])}
             />
-            <Bar yAxisId="fat" dataKey="faturamento" name="Faturamento" fill="var(--accent)" radius={[6, 6, 0, 0]} />
-            <Line yAxisId="cmv" type="monotone" dataKey="cmvPercentual" name="CMV Real %" stroke="var(--danger)" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            <Bar yAxisId="fat" dataKey="faturamento" name="Faturamento" fill="var(--accent)" fillOpacity={0.5} radius={[6, 6, 0, 0]} />
+            <Line yAxisId="cmv" type="monotone" dataKey="cmvPercentual" name="CMV Real %" stroke="var(--danger)" strokeWidth={2.5} dot={{ r: 3 }} connectNulls />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
