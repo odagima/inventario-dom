@@ -1,0 +1,30 @@
+{
+  "name": "inventario-dom",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "vite build && wrangler pages deploy dist --project-name=inventario-dom",
+    "import:everest": "node scripts/import-everest.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "fuse.js": "^7.0.0",
+    "html5-qrcode": "^2.3.8",
+    "jsbarcode": "^3.11.6",
+    "jspdf": "^2.5.2",
+    "jszip": "^3.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0",
+    "wrangler": "^3.78.0"
+  }
+}
