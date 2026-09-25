@@ -131,9 +131,9 @@ export default function ImportarCompras() {
           <div style={{ background: 'rgba(48,209,88,0.1)', borderRadius: 10, padding: 12 }}>
             <p style={{ margin: 0, color: 'var(--success)', fontWeight: 500 }}>Importação concluída</p>
             <p className="muted" style={{ margin: '4px 0 0' }}>
-              {resultado.notas} nota(s) · {resultado.itens} item(ns)
+              {resultado.notas} nota(s) nova(s) · {resultado.itens} item(ns)
+              {resultado.notasAtualizadas > 0 && ` · ${resultado.notasAtualizadas} nota(s) já existiam e foram atualizadas com os valores do arquivo`}
               {resultado.semCorrespondencia > 0 && ` · ${resultado.semCorrespondencia} sem produto correspondente no cadastro`}
-              {resultado.notasDuplicadas > 0 && ` · ${resultado.notasDuplicadas} nota(s) já existiam e foram ignoradas`}
               {resultado.foraDoSubgrupo > 0 && ` · ${resultado.foraDoSubgrupo} linha(s) fora dos subgrupos relevantes (ignoradas)`}
               {resultado.foraDoCMV > 0 && ` · ${resultado.foraDoCMV} item(ns) marcado(s) "Calcula CMV = Não" (guardados, fora do CMV Real)`}
               {resultado.linhasIgnoradas > 0 && ` · ${resultado.linhasIgnoradas} linha(s) sem N. Nota (rodapé/totais, ignoradas)`}

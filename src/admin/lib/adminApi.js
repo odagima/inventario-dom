@@ -707,7 +707,7 @@ const COL_OBRIGATORIAS = ['CODIGO', 'Q_ESTOQUE', 'VALOR_TOTAL']
 export async function importarComprasEverest(linhasBrutas, onProgresso) {
   // linhasBrutas: array de arrays (linha 0 = cabeçalho), como sai de
   // XLSX.utils.sheet_to_json(sheet, {header:1}).
-  if (!linhasBrutas.length) return { notas: 0, itens: 0, semCorrespondencia: 0, notasDuplicadas: 0, foraDoSubgrupo: 0, foraDoCMV: 0, linhasIgnoradas: 0 }
+  if (!linhasBrutas.length) return { notas: 0, notasAtualizadas: 0, itens: 0, semCorrespondencia: 0, foraDoSubgrupo: 0, foraDoCMV: 0, linhasIgnoradas: 0 }
 
   const cabecalho = linhasBrutas[0]
   const resto = linhasBrutas.slice(1)
@@ -800,47 +800,67 @@ export async function importarComprasEverest(linhasBrutas, onProgresso) {
 
   const notas = Array.from(notasPorNumero.values())
 
-  // Evita duplicar: busca quais dessas notas (número + empresa) já existem antes de inserir.
+  // 25/09/2026, correção pedida pelo Felipe: uma compra de R$33.000 tinha sido importada como
+  // R$33.000.000 (erro no arquivo do Everest), foi corrigida lá e reenviada aqui — mas a versão
+  // anterior deste código só CONFERIA se a nota (número + empresa) já existia e, se sim, ignorava
+  // a nota inteira (`continue`, contava em `notasDuplicadas`), sem nunca olhar se os valores
+  // mudaram. Reimportar a correção não tinha efeito nenhum. Agora, nota já existente = itens são
+  // substituídos pelos do arquivo novo (a fonte de verdade é sempre o Everest); só usa `insert`
+  // puro quando a nota é realmente inédita.
   const numerosNota = notas.map((n) => n.numeroNota).filter(Boolean)
-  const existentesPorChave = new Set()
+  const idExistentePorChave = new Map()
   const tamanhoLoteCheck = 300
   for (let i = 0; i < numerosNota.length; i += tamanhoLoteCheck) {
     const lote = numerosNota.slice(i, i + tamanhoLoteCheck)
     const { data: jaExistentes, error: erroCheck } = await supabase
       .from('notas_importadas')
-      .select('numero_nota, cnpj_destinatario, fantasia')
+      .select('id, numero_nota, cnpj_destinatario, fantasia')
       .in('numero_nota', lote)
     if (erroCheck) throw erroCheck
-    for (const e of jaExistentes) existentesPorChave.add(`${e.numero_nota}|${e.fantasia || e.cnpj_destinatario || ''}`)
+    for (const e of jaExistentes) idExistentePorChave.set(`${e.numero_nota}|${e.fantasia || e.cnpj_destinatario || ''}`, e.id)
   }
 
   let notasSalvas = 0
+  let notasAtualizadas = 0
   let itensSalvos = 0
   let semCorrespondencia = 0
-  let notasDuplicadas = 0
   let foraDoCMV = 0
 
   for (const nota of notas) {
     const chaveNota = `${nota.numeroNota}|${nota.fantasia || ''}`
-    if (existentesPorChave.has(chaveNota)) {
-      notasDuplicadas += 1
-      continue
+    const idExistente = idExistentePorChave.get(chaveNota)
+
+    let notaId
+    if (idExistente) {
+      const { error: erroUpdate } = await supabase
+        .from('notas_importadas')
+        .update({ fornecedor: nota.fornecedor, data_emissao: nota.dataEmissao || null })
+        .eq('id', idExistente)
+      if (erroUpdate) throw erroUpdate
+      // Substitui os itens da nota em vez de acumular — reimportar a mesma nota nunca deve somar
+      // valores/quantidades em dobro, só refletir o que o arquivo tem agora.
+      const { error: erroDelItens } = await supabase.from('notas_importadas_itens').delete().eq('nota_id', idExistente)
+      if (erroDelItens) throw erroDelItens
+      notaId = idExistente
+      notasAtualizadas += 1
+    } else {
+      const { data: notaSalva, error: erroNota } = await supabase
+        .from('notas_importadas')
+        .insert({
+          numero_nota: nota.numeroNota,
+          fornecedor: nota.fornecedor,
+          fantasia: nota.fantasia || null,
+          data_emissao: nota.dataEmissao || null
+        })
+        .select()
+        .single()
+      if (erroNota) throw erroNota
+      notaId = notaSalva.id
+      notasSalvas += 1
     }
 
-    const { data: notaSalva, error: erroNota } = await supabase
-      .from('notas_importadas')
-      .insert({
-        numero_nota: nota.numeroNota,
-        fornecedor: nota.fornecedor,
-        fantasia: nota.fantasia || null,
-        data_emissao: nota.dataEmissao || null
-      })
-      .select()
-      .single()
-    if (erroNota) throw erroNota
-
     const itensParaSalvar = nota.itens.map((it) => ({
-      nota_id: notaSalva.id,
+      nota_id: notaId,
       produto_id: it.produtoId,
       // 12/08/2026, migration_v9: guarda o código Everest bruto da linha (já lido do relatório,
       // ver `codigo` acima) — não só o `produto_id` resolvido na hora do import. Precisa disso pra
@@ -863,15 +883,15 @@ export async function importarComprasEverest(linhasBrutas, onProgresso) {
       if (erroItens) throw erroItens
     }
 
-    notasSalvas += 1
     itensSalvos += itensParaSalvar.length
     semCorrespondencia += itensParaSalvar.filter((i) => !i.produto_id).length
     foraDoCMV += itensParaSalvar.filter((i) => !i.calcula_cmv).length
-    onProgresso?.({ feito: notasSalvas, total: notas.length })
-    if (notasSalvas % 20 === 0) await new Promise((r) => setTimeout(r, 0))
+    const feito = notasSalvas + notasAtualizadas
+    onProgresso?.({ feito, total: notas.length })
+    if (feito % 20 === 0) await new Promise((r) => setTimeout(r, 0))
   }
 
-  return { notas: notasSalvas, itens: itensSalvos, semCorrespondencia, notasDuplicadas, foraDoSubgrupo, foraDoCMV, linhasIgnoradas }
+  return { notas: notasSalvas, notasAtualizadas, itens: itensSalvos, semCorrespondencia, foraDoSubgrupo, foraDoCMV, linhasIgnoradas }
 }
 
 // ---------- Importar Vendas (relatório "Vendas Integração PDV" do Everest — formato novo,
