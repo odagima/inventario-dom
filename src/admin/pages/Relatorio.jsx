@@ -62,6 +62,7 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
   const [saidaQtd, setSaidaQtd] = useState('')
   const [saidaMotivo, setSaidaMotivo] = useState('')
   const [salvandoSaida, setSalvandoSaida] = useState(false)
+  const [buscaItem, setBuscaItem] = useState('')
 
   useEscParaFechar(!!saidaItem, () => { if (!salvandoSaida) setSaidaItem(null) })
 
@@ -79,10 +80,10 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
     return { mes: d.getMonth() + 1, ano: d.getFullYear() }
   }
 
-  // Agrupa "Sessões de contagem" por mês/ano de referência e depois por loja — só pra
-  // Inventário (tipoFiltro = 'mensal'). Contagem Semanal usa outro agrupamento (ver abaixo),
-  // já que ela não separa mais por loja (Compras não separa por loja no Everest) — quem
-  // escopa é o Grupo de contagem.
+  // Agrupa "Sessões de contagem" por mês/ano de referência, depois por loja e depois por quem
+  // contou — só pra Inventário (tipoFiltro = 'mensal'). Contagem Semanal usa outro agrupamento
+  // (ver abaixo), já que ela não separa mais por loja (Compras não separa por loja no Everest) —
+  // quem escopa é o Grupo de contagem.
   const sessoesAgrupadas = useMemo(() => {
     if (tipoFiltro !== 'mensal') return null
     const porMes = new Map()
@@ -92,12 +93,20 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
       if (!porMes.has(chave)) porMes.set(chave, { ano, mes, porLoja: new Map() })
       const grupo = porMes.get(chave)
       const loja = s.unidades?.nome || '—'
-      if (!grupo.porLoja.has(loja)) grupo.porLoja.set(loja, [])
-      grupo.porLoja.get(loja).push(s)
+      if (!grupo.porLoja.has(loja)) grupo.porLoja.set(loja, new Map())
+      const porUsuario = grupo.porLoja.get(loja)
+      const usuario = s.usuario || '—'
+      if (!porUsuario.has(usuario)) porUsuario.set(usuario, [])
+      porUsuario.get(usuario).push(s)
     }
     return Array.from(porMes.values())
       .sort((a, b) => (b.ano - a.ano) || (b.mes - a.mes))
-      .map((g) => ({ ...g, porLoja: Array.from(g.porLoja.entries()).sort((a, b) => a[0].localeCompare(b[0])) }))
+      .map((g) => ({
+        ...g,
+        porLoja: Array.from(g.porLoja.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([loja, porUsuario]) => [loja, Array.from(porUsuario.entries()).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR'))])
+      }))
   }, [sessoes, tipoFiltro])
 
   // Mesma correção: a referência informada manda. Sessão mensal cai no dia 1º do mês de
@@ -129,6 +138,16 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
         porData: Array.from(porData.entries()).sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
       }))
   }, [sessoes, tipoFiltro])
+
+  // Itens contados da sessão aberta: ordem alfabética + filtro de busca por nome — pedido do
+  // Felipe, porque uma contagem grande tem item demais pra rolar procurando um por um.
+  const linhasContadasFiltradas = useMemo(() => {
+    const termo = buscaItem.trim().toLowerCase()
+    return linhas
+      .filter((l) => l.status === 'contado' || l.status === 'extra')
+      .filter((l) => !termo || (l.nome || '').toLowerCase().includes(termo))
+      .sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'))
+  }, [linhas, buscaItem])
 
   // 02/09/2026: mostrava `iniciada_em` (o dia em que a pessoa DIGITOU) sempre que não havia
   // `data_referencia` — que é o caso de TODO inventário mensal, já que ele só informa mês e ano.
@@ -172,6 +191,10 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
   }
 
   async function abrirSessao(sessao) {
+    // Só limpa a busca quando troca de sessão de verdade — `salvarQuantidade` chama isso de novo
+    // pra recarregar a MESMA sessão depois de uma edição, e perder o texto buscado nessa hora
+    // seria um incômodo bobo.
+    if (!sessaoAberta || sessaoAberta.id !== sessao.id) setBuscaItem('')
     setSessaoAberta(sessao)
     setConfirmandoExcluir(false)
     setCarregandoRelatorio(true)
@@ -448,9 +471,19 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
             <p className="muted" style={{ marginBottom: 6 }}>
               Itens contados <span style={{ fontSize: 11 }}>· clique na quantidade para corrigir</span>
             </p>
+            <input
+              type="text"
+              value={buscaItem}
+              onChange={(e) => setBuscaItem(e.target.value)}
+              placeholder="Buscar item pelo nome…"
+              style={{ width: '100%', marginBottom: 10 }}
+            />
             {erroEdicao && <p style={{ margin: '0 0 8px', color: 'var(--danger)', fontSize: 12 }}>{erroEdicao}</p>}
             <div style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 16 }}>
-              {linhas.filter((l) => l.status === 'contado' || l.status === 'extra').map((l, i) => (
+              {linhasContadasFiltradas.length === 0 && (
+                <p className="muted" style={{ padding: '8px 0' }}>Nenhum item encontrado pra "{buscaItem}".</p>
+              )}
+              {linhasContadasFiltradas.map((l, i) => (
                 <div key={i} className="list-item">
                   <div>
                     <p style={{ margin: 0 }}>{l.nome}</p>
@@ -699,12 +732,17 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
               }}>
                 {grupo.mes ? NOMES_MES[grupo.mes - 1] : '—'}/{grupo.ano || '—'}
               </p>
-              {grupo.porLoja.map(([loja, sessoesDaLoja]) => (
+              {grupo.porLoja.map(([loja, porUsuario]) => (
                 <div key={loja} style={{ marginBottom: 12, paddingLeft: 10, borderLeft: '2px solid var(--border)' }}>
                   <p className="muted" style={{ margin: '0 0 4px', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{loja}</p>
-                  <div>
-                    {sessoesDaLoja.map((s) => <ItemSessao key={s.id} s={s} onAbrir={abrirSessao} dataDaSessao={dataDaSessao} />)}
-                  </div>
+                  {porUsuario.map(([usuario, sessoesDoUsuario]) => (
+                    <div key={usuario} style={{ marginBottom: 8, paddingLeft: 10 }}>
+                      {porUsuario.length > 1 && <p className="muted" style={{ margin: '0 0 2px', fontSize: 11 }}>{usuario}</p>}
+                      <div>
+                        {sessoesDoUsuario.map((s) => <ItemSessao key={s.id} s={s} onAbrir={abrirSessao} dataDaSessao={dataDaSessao} />)}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
