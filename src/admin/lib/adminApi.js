@@ -751,6 +751,63 @@ export async function buscarSaldoPorGrupoEverest(grupoEverest, filtro = {}) {
     .map((p) => ({ produto: p, porMes: porProduto.get(p.id) }))
 }
 
+function mesesEntre(inicio, fim) {
+  const lista = []
+  let ano = inicio.ano, mes = inicio.mes
+  while (ano < fim.ano || (ano === fim.ano && mes <= fim.mes)) {
+    lista.push(`${ano}-${String(mes).padStart(2, '0')}`)
+    mes++
+    if (mes > 12) { mes = 1; ano++ }
+  }
+  return lista
+}
+function mesAnteriorA({ mes, ano }) {
+  return mes === 1 ? { mes: 12, ano: ano - 1 } : { mes: mes - 1, ano }
+}
+
+// Consumo REAL de 1 produto, mês a mês (pedido do Felipe, 02/10/2026): consumo = saldo contado no
+// mês anterior + compras do mês − saldo contado no mês atual. Onde falta uma ponta (mês sem
+// contagem registrada de um lado ou do outro), devolve null em vez de inventar número.
+//
+// Compras vêm de `notas_importadas_itens` por `codigo_everest` (não por `produto_id` — esse pode
+// ficar órfão se o cadastro de produtos for reimportado, ver migration_v9.sql) e NÃO são
+// filtráveis pela mesma loja granular do saldo (só existe "fantasia" DOM/DALVA na nota, não a
+// frente específica) — por isso o consumo usa o total de compras do produto, independente de
+// quais lojas estão marcadas no filtro de saldo.
+export async function buscarConsumoMensalPorProduto(produtoId, codigoEverest, { unidadeIds, periodoInicio, periodoFim } = {}) {
+  if (!periodoInicio || !periodoFim) throw new Error('Período é obrigatório pra calcular consumo.')
+  const antes = mesAnteriorA(periodoInicio)
+
+  const mapaSaldo = await buscarSaldoMensalPorProdutos([produtoId], { unidadeIds, periodoInicio: antes, periodoFim })
+  const porMesSaldo = mapaSaldo.get(produtoId) || new Map()
+
+  const notas = await buscarTodasAsLinhas(() => supabase.from('notas_importadas').select('id, data_emissao'))
+  const dataDaNota = new Map((notas || []).map((n) => [n.id, n.data_emissao]))
+  const itensCompra = await buscarPorIdsEmLotes(
+    (lote) => supabase.from('notas_importadas_itens').select('nota_id, quantidade').eq('codigo_everest', codigoEverest).in('nota_id', lote),
+    (notas || []).map((n) => n.id)
+  )
+  const comprasPorMes = new Map()
+  itensCompra.forEach((item) => {
+    const data = dataDaNota.get(item.nota_id)
+    if (!data) return
+    const rotulo = data.slice(0, 7)
+    comprasPorMes.set(rotulo, (comprasPorMes.get(rotulo) || 0) + Number(item.quantidade || 0))
+  })
+
+  const mesesComAntes = mesesEntre(antes, periodoFim)
+  const resultado = new Map()
+  for (let i = 1; i < mesesComAntes.length; i++) {
+    const atual = mesesComAntes[i], anterior = mesesComAntes[i - 1]
+    const saldoAtual = porMesSaldo.get(atual)
+    const saldoAnterior = porMesSaldo.get(anterior)
+    if (saldoAtual == null || saldoAnterior == null) { resultado.set(atual, null); continue }
+    const compras = comprasPorMes.get(atual) || 0
+    resultado.set(atual, saldoAnterior + compras - saldoAtual)
+  }
+  return resultado
+}
+
 // `filtro` ({ tipo, mes, ano }) opcional, repassado pra `buscarSaldoItem` — usado pela nova aba
 // de Saldo dentro de Contagem Semanal (01/10/2026, pedido do Felipe), que manda tipo:'semanal' +
 // mês/ano pra não misturar com Inventário. Sem filtro, continua mostrando todo tipo (comportamento

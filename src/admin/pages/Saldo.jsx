@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { buscarProdutosAdmin, listarGruposEverestComContagem, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { buscarProdutosAdmin, listarGruposEverestComContagem, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest, buscarConsumoMensalPorProduto } from '../lib/adminApi'
 
 const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 const NOMES_MES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
@@ -44,11 +44,19 @@ export default function Saldo() {
   const [resultadosBusca, setResultadosBusca] = useState([])
   const [produtoSelecionado, setProdutoSelecionado] = useState(null)
   const [porMesItem, setPorMesItem] = useState(new Map())
+  const [consumoItem, setConsumoItem] = useState(new Map())
   const debounceRef = useRef(null)
 
   const [gruposEverest, setGruposEverest] = useState([])
   const [grupoEverestSelecionado, setGrupoEverestSelecionado] = useState('')
   const [saldoGrupo, setSaldoGrupo] = useState([])
+
+  // Consumo real (saldo anterior + compras − saldo atual) sob demanda, ao passar o mouse num
+  // item da tabela de grupo — pedido do Felipe. Cache por produto pra não refazer a conta toda
+  // vez que o mouse volta a passar por cima do mesmo item.
+  const [consumoCache, setConsumoCache] = useState(new Map())
+  const [produtoHover, setProdutoHover] = useState(null)
+  const [posHover, setPosHover] = useState({ top: 0, left: 0 })
 
   const [unidades, setUnidades] = useState([])
   const [unidadesSelecionadas, setUnidadesSelecionadas] = useState(new Set())
@@ -104,11 +112,12 @@ export default function Saldo() {
     }
   }
 
-  async function carregarItem(produtoId) {
+  async function carregarItem(produto) {
     setCarregando(true)
     try {
-      const mapa = await buscarSaldoMensalPorProdutos([produtoId], filtroAtual())
-      setPorMesItem(mapa.get(produtoId) || new Map())
+      const mapa = await buscarSaldoMensalPorProdutos([produto.id], filtroAtual())
+      setPorMesItem(mapa.get(produto.id) || new Map())
+      setConsumoItem(await buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual()))
     } finally {
       setCarregando(false)
     }
@@ -118,7 +127,7 @@ export default function Saldo() {
     setProdutoSelecionado(produto)
     setTermo('')
     setResultadosBusca([])
-    await carregarItem(produto.id)
+    await carregarItem(produto)
   }
 
   async function carregarGrupo(nome) {
@@ -138,7 +147,7 @@ export default function Saldo() {
 
   // Recarrega quando período/lojas mudam, com produto/grupo já escolhido.
   useEffect(() => {
-    if (modo === 'item' && produtoSelecionado) carregarItem(produtoSelecionado.id)
+    if (modo === 'item' && produtoSelecionado) carregarItem(produtoSelecionado)
     if (modo === 'grupoEverest' && grupoEverestSelecionado) carregarGrupo(grupoEverestSelecionado)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inicioMes, inicioAno, fimMes, fimAno, unidadesSelecionadas])
@@ -168,8 +177,25 @@ export default function Saldo() {
   }
   function pararArrasto() { arrastoRef.current = null }
 
+  // Ao passar o mouse num item da tabela de grupo, mostra um gráfico de consumo real (pedido do
+  // Felipe) — busca só na primeira vez que passa por aquele produto, depois fica em cache.
+  function aoPassarMouseNoItem(produto, e) {
+    if (arrastoRef.current?.arrastando) return // não abre tooltip no meio de um arraste
+    const rect = e.currentTarget.getBoundingClientRect()
+    setPosHover({ top: rect.bottom + 6, left: rect.left })
+    setProdutoHover(produto)
+    if (!consumoCache.has(produto.id)) {
+      buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual()).then((mapa) => {
+        setConsumoCache((prev) => new Map(prev).set(produto.id, mapa))
+      })
+    }
+  }
+  function aoSairDoItem() { setProdutoHover(null) }
+
   const meses = mesesDoPeriodo({ mes: inicioMes, ano: inicioAno }, { mes: fimMes, ano: fimAno })
   const dadosGraficoItem = meses.map((m) => ({ mes: labelMes(m), quantidade: porMesItem.get(m) ?? 0 }))
+  const dadosConsumoItem = meses.map((m) => ({ mes: labelMes(m), consumo: consumoItem.get(m) ?? null }))
+  const dadosConsumoHover = produtoHover ? meses.map((m) => ({ mes: labelMes(m), consumo: consumoCache.get(produtoHover.id)?.get(m) ?? null })) : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -267,6 +293,21 @@ export default function Saldo() {
               <span>{fmt(porMesItem.get(m))}</span>
             </div>
           ))}
+
+          <p className="muted" style={{ margin: '18px 0 6px', fontWeight: 500, fontSize: 13 }}>
+            Consumo real (saldo anterior + compras − saldo atual)
+          </p>
+          <div style={{ width: '100%', height: 180 }}>
+            <ResponsiveContainer>
+              <LineChart data={dadosConsumoItem}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="mes" stroke="var(--text-secondary)" fontSize={12} />
+                <YAxis stroke="var(--text-secondary)" fontSize={12} />
+                <Tooltip contentStyle={{ background: 'var(--header-bg)', border: '0.5px solid rgba(244,241,233,0.15)', borderRadius: 8, color: 'var(--header-text)' }} />
+                <Line type="monotone" dataKey="consumo" stroke="var(--warning)" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
 
@@ -300,7 +341,13 @@ export default function Saldo() {
                 <tbody>
                   {saldoGrupo.map(({ produto, porMes }) => (
                     <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                      <td style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
+                      <td
+                        onMouseEnter={(e) => aoPassarMouseNoItem(produto, e)}
+                        onMouseLeave={aoSairDoItem}
+                        style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap', cursor: 'help' }}
+                      >
+                        {produto.nome}
+                      </td>
                       {meses.map((m) => (
                         <td key={m} style={{ textAlign: 'right', padding: '8px' }}>{fmt(porMes.get(m))}</td>
                       ))}
@@ -308,6 +355,32 @@ export default function Saldo() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {produtoHover && (
+        <div
+          style={{
+            position: 'fixed', top: posHover.top, left: posHover.left, zIndex: 50,
+            background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10,
+            padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.18)', pointerEvents: 'none', width: 260
+          }}
+        >
+          <p style={{ margin: '0 0 2px', fontWeight: 600, fontSize: 13 }}>{produtoHover.nome}</p>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 11 }}>Consumo real por mês</p>
+          {!consumoCache.has(produtoHover.id) ? (
+            <p className="muted" style={{ fontSize: 12 }}>Calculando…</p>
+          ) : (
+            <div style={{ width: '100%', height: 110 }}>
+              <ResponsiveContainer>
+                <LineChart data={dadosConsumoHover}>
+                  <XAxis dataKey="mes" stroke="var(--text-secondary)" fontSize={10} />
+                  <YAxis stroke="var(--text-secondary)" fontSize={10} width={30} />
+                  <Line type="monotone" dataKey="consumo" stroke="var(--warning)" strokeWidth={2} dot={{ r: 2 }} connectNulls={false} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           )}
         </div>
