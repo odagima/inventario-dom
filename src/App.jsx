@@ -5,6 +5,7 @@ import SelecaoUnidade from './pages/SelecaoUnidade'
 import TelaContagem from './pages/TelaContagem'
 import TelaPerdas from './pages/TelaPerdas'
 import TelaProducao from './pages/TelaProducao'
+import TelaRequisicao from './pages/TelaRequisicao'
 import CadastroShell from './admin/CadastroShell'
 import AdminShell from './admin/AdminShell'
 import ProdutividadeShell from './produtividade/ProdutividadeShell'
@@ -49,7 +50,7 @@ function salvarUsuario(usuario) {
 
 export default function App() {
   const usuarioSalvo = lerUsuarioSalvo()
-  const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'contagem' | 'produtividade' | 'cadastro' | 'admin'
+  const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'contagem' | 'producao' | 'requisicao' | 'produtividade' | 'cadastro' | 'admin'
   const [contexto, setContexto] = useState(null) // { sessao, unidade, grupo } — unidade fica null na contagem semanal (sem loja)
   const [usuarioAtual, setUsuarioAtual] = useState(usuarioSalvo)
 
@@ -85,9 +86,11 @@ export default function App() {
   // de volta nele quando a pessoa não tem perfil vinculado (ninguém perde acesso na transição).
   if (modo === 'admin') return <AdminShell nivelAcesso={usuarioAtual?.nivelAcesso} usuario={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'produtividade') return <ProdutividadeShell usuarioLogado={usuarioAtual} onVoltar={voltarPraHome} />
-  // Produção não passa por SelecaoUnidade: não tem loja (cozinha única) nem sessão por usuário —
-  // a lista de "em produção" é compartilhada por toda a cozinha.
+  // Produção não passa por SelecaoUnidade: a frente é escolhida dentro da própria tela (não é
+  // "loja", é migration_v15.sql) e não tem sessão por usuário — a lista de "em produção" é
+  // compartilhada por toda a cozinha, cada produção já carregando sua própria frente.
   if (modo === 'producao') return <TelaProducao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
+  if (modo === 'requisicao') return <TelaRequisicao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
 
   if (modo === 'contagem') {
     if (!contexto) {
@@ -122,6 +125,7 @@ export default function App() {
       usuarioLogado={usuarioAtual}
       onEntrarContagem={() => setModo('contagem')}
       onEntrarProducao={() => setModo('producao')}
+      onEntrarRequisicao={() => setModo('requisicao')}
       onEntrarProdutividade={() => setModo('produtividade')}
       onAbrirCadastro={() => setModo('cadastro')}
       onAbrirAdmin={() => setModo('admin')}

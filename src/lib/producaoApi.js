@@ -1,31 +1,85 @@
 import { supabase } from './supabase'
+import { calcularFCTeorico } from './fatoresCorrecaoApi'
 
-// ── PRODUÇÃO (migration_v14.sql) ─────────────────────────────────────────────
+// ── PRODUÇÃO (migration_v14.sql, com frente desde migration_v15.sql) ─────────
 // Registro da etapa de transformação: o que entrou, o que saiu, e quanto rendeu de verdade.
 //
-// ⚠️ NADA AQUI MOVIMENTA ESTOQUE. O estoque é MEDIDO pela contagem, não calculado por movimento —
-// a contagem já captura a transformação sozinha (peça a menos, PP a mais). O valor deste módulo
-// é medir o RENDIMENTO REAL, que hoje só existe como suposição dentro do fator da ficha.
+// O saldo por CONTAGEM continua exatamente como sempre foi: MEDIDO pela contagem, nunca calculado
+// por movimento (`itens_contagem`/`Saldo.jsx`, intocados por este módulo).
+//
+// Desde a v15, quando a produção tem `frente_id`, finalizar TAMBÉM lança movimento no saldo
+// CALCULADO por frente (`estoque_movimentos`/`saldo_calculado_frente`, ver `estoqueMovimentosApi.js`)
+// — ledger próprio, separado do saldo por contagem, pra não arriscar duplicar contagem. Produção
+// sem frente (lançamento antigo, ou alguém sem frente escolhida) não lança nenhum movimento.
 //
 // Módulo próprio (e não dentro de api.js) porque produção não tem nada a ver com o fluxo de
-// sessão/contagem: não tem itens esperados, não tem loja, não finaliza no mesmo dia.
+// sessão/contagem: não tem itens esperados, não tem loja (tem frente), não finaliza no mesmo dia.
 
 const SELECT_PRODUCAO = `
   id, data, turno, status, usuario_inicio, usuario_fim, iniciada_em, finalizada_em,
-  planejada, meta_quantidade, meta_codigo_everest, observacao,
+  planejada, meta_quantidade, meta_codigo_everest, observacao, frente_id, producao_origem_id,
+  frentes ( nome ),
   producoes_itens ( id, papel, codigo_everest, produto_id, quantidade, unidade, usuario, registrado_em, produtos ( nome, unidade_medida ) )
 `
 
 // Produção em andamento pertence à COZINHA, não a quem abriu: quem inicia pode não ser quem
 // finaliza (troca de turno, preparo que atravessa dias). Por isso a lista NÃO filtra por usuário.
-export async function listarProducoesEmAndamento() {
-  const { data, error } = await supabase
+// `frenteId` é opcional — filtra pra só a frente de quem está vendo, quando fizer sentido na tela.
+// Só traz produções que JÁ têm pelo menos uma entrada (as "planejadas" sem item vivem em
+// `listarProducoesPlanejadas`, pra não misturar "a fazer" com "sendo feita agora").
+export async function listarProducoesEmAndamento(frenteId) {
+  let q = supabase
     .from('producoes')
     .select(SELECT_PRODUCAO)
     .eq('status', 'em_andamento')
-    .order('iniciada_em', { ascending: true }) // a mais antiga primeiro: é a que está esperando há mais tempo
+  if (frenteId) q = q.eq('frente_id', frenteId)
+  const { data, error } = await q.order('iniciada_em', { ascending: true }) // a mais antiga primeiro: é a que está esperando há mais tempo
   if (error) throw error
-  return data || []
+  return (data || []).filter((p) => (p.producoes_itens || []).length > 0)
+}
+
+// "A fazer": linhas planejadas (campos que já existiam desde a v14, sem tela até agora — pedido
+// do Felipe) que ainda não têm nenhum item lançado. Viram "em andamento" assim que alguém usa
+// `iniciarProducaoPlanejada`.
+export async function listarProducoesPlanejadas(frenteId) {
+  let q = supabase
+    .from('producoes')
+    .select(SELECT_PRODUCAO)
+    .eq('planejada', true)
+    .eq('status', 'em_andamento')
+  if (frenteId) q = q.eq('frente_id', frenteId)
+  const { data, error } = await q.order('iniciada_em', { ascending: true })
+  if (error) throw error
+  return (data || []).filter((p) => (p.producoes_itens || []).length === 0)
+}
+
+export async function criarProducaoPlanejada({ data, frenteId, metaCodigoEverest, metaQuantidade, observacao, usuario }) {
+  const { data: producao, error } = await supabase
+    .from('producoes')
+    .insert({
+      data,
+      frente_id: frenteId || null,
+      planejada: true,
+      meta_codigo_everest: metaCodigoEverest,
+      meta_quantidade: metaQuantidade != null ? Number(metaQuantidade) : null,
+      observacao: observacao || null,
+      usuario_inicio: usuario || null
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return producao
+}
+
+// Puxa uma produção planejada pra "em andamento de verdade" — preenche a primeira entrada. Depois
+// disso ela some de `listarProducoesPlanejadas` e passa a aparecer em `listarProducoesEmAndamento`.
+export async function iniciarProducaoPlanejada(producaoId, entrada, usuario) {
+  await adicionarItemProducao({ producaoId, papel: 'entrada', ...entrada, usuario })
+  const { error } = await supabase
+    .from('producoes')
+    .update({ usuario_inicio: usuario || null })
+    .eq('id', producaoId)
+  if (error) throw error
 }
 
 export async function listarProducoes({ status, dataInicio, dataFim, limite = 200 } = {}) {
@@ -40,13 +94,17 @@ export async function listarProducoes({ status, dataInicio, dataFim, limite = 20
 
 // Abre a produção JÁ COM a entrada. Abrir vazio permitiria uma produção sem nada dentro ocupando
 // o painel — e "o que estou produzindo" sem dizer de quê não ajuda ninguém.
-export async function abrirProducao({ data, turno, usuario, entrada, observacao }) {
+export async function abrirProducao({ data, turno, usuario, entrada, observacao, frenteId, producaoOrigemId }) {
   if (!entrada?.codigoEverest) throw new Error('Produção precisa de pelo menos um item de entrada.')
   if (!(Number(entrada.quantidade) > 0)) throw new Error('A quantidade de entrada precisa ser maior que zero.')
 
   const { data: producao, error } = await supabase
     .from('producoes')
-    .insert({ data, turno: turno || null, usuario_inicio: usuario || null, observacao: observacao || null })
+    .insert({
+      data, turno: turno || null, usuario_inicio: usuario || null, observacao: observacao || null,
+      frente_id: frenteId || null,
+      producao_origem_id: producaoOrigemId || null
+    })
     .select()
     .single()
   if (error) throw error
@@ -134,4 +192,26 @@ export function rendimentoDoEvento(producao) {
     aproveitamento: saida / entrada,
     unidade: [...unidades][0] || ''
   }
+}
+
+// "Esperado" do F.C. teórico de um item: média de todas as ordens concluídas anteriores pra esse
+// mesmo código. Sem histórico ainda, a semente é ~100% (ver `fatoresCorrecaoApi.js` — nunca o
+// fator do passo isolado, isso dá número errado). Recalcula na hora em vez de guardar, porque
+// `fatores_correcao` pode mudar com o tempo e queremos sempre comparar com o conhecimento atual.
+export async function mediaFCTeoricoHistorico(codigoEverest, mapaFatores) {
+  const concluidas = await listarProducoes({ status: 'concluida', limite: 500 })
+  const valores = []
+  concluidas.forEach((p) => {
+    const itens = p.producoes_itens || []
+    const entradaTotal = itens.filter((i) => i.papel === 'entrada').reduce((a, i) => a + Number(i.quantidade || 0), 0)
+    if (!(entradaTotal > 0)) return
+    itens
+      .filter((i) => i.papel === 'saida' && i.codigo_everest === codigoEverest)
+      .forEach((i) => {
+        const fc = calcularFCTeorico(mapaFatores, codigoEverest, Number(i.quantidade), entradaTotal)
+        if (fc != null) valores.push(fc)
+      })
+  })
+  if (!valores.length) return 1
+  return valores.reduce((a, b) => a + b, 0) / valores.length
 }
