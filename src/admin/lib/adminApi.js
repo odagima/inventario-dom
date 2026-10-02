@@ -663,17 +663,37 @@ export async function listarGruposEverest() {
 // Pedido do Felipe (02/10/2026): o seletor de Grupo Everest só deve oferecer grupo que TEVE
 // contagem de verdade dentro do filtro escolhido (período + lojas) — senão a lista fica poluída
 // de grupos cadastrados no Everest que nunca foram contados (ex.: "Ativos imobilizados e
-// decoração"). Reaproveita a mesma lógica de `buscarSaldoMensalPorProdutos` (mesmo filtro, mesma
-// regra de período) em vez de duplicar a conta.
+// decoração").
+//
+// ⚠️ Primeira versão fazia isso ao contrário (buscava TODO produto com grupo Everest — pode ser
+// milhares no catálogo inteiro — pra só depois ver quem tinha contagem), e isso deixou a tela
+// lenta/travada (02/10/2026). Agora parte de `itens_contagem` (já filtrado por período/loja/tipo,
+// um conjunto bem menor) e só pega o grupo do produto através do join — nunca materializa a lista
+// do catálogo inteiro.
 export async function listarGruposEverestComContagem(filtro = {}) {
-  const produtos = await buscarTodasAsLinhas(() =>
-    supabase.from('produtos').select('id, grupo_everest').not('grupo_everest', 'is', null)
-  )
-  if (!produtos.length) return []
-  const porProduto = await buscarSaldoMensalPorProdutos(produtos.map((p) => p.id), filtro)
-  const gruposComDado = new Set()
-  produtos.forEach((p) => { if (porProduto.has(p.id)) gruposComDado.add(p.grupo_everest) })
-  return [...gruposComDado].sort()
+  let query = supabase
+    .from('itens_contagem')
+    .select('produtos!inner(grupo_everest), sessoes_contagem!inner(tipo, mes_referencia, ano_referencia, unidade_id)')
+    .not('produtos.grupo_everest', 'is', null)
+    .eq('sessoes_contagem.tipo', 'mensal')
+  if (filtro.unidadeIds?.length) query = query.in('sessoes_contagem.unidade_id', filtro.unidadeIds)
+  if (filtro.periodoInicio?.ano) query = query.gte('sessoes_contagem.ano_referencia', filtro.periodoInicio.ano)
+  if (filtro.periodoFim?.ano) query = query.lte('sessoes_contagem.ano_referencia', filtro.periodoFim.ano)
+  const { data, error } = await query
+  if (error) throw error
+
+  const chaveComparavel = (ano, mes) => ano * 12 + mes
+  const minimo = filtro.periodoInicio ? chaveComparavel(filtro.periodoInicio.ano, filtro.periodoInicio.mes) : -Infinity
+  const maximo = filtro.periodoFim ? chaveComparavel(filtro.periodoFim.ano, filtro.periodoFim.mes) : Infinity
+
+  const grupos = new Set()
+  data.forEach((d) => {
+    const { mes_referencia: mes, ano_referencia: ano } = d.sessoes_contagem || {}
+    if (!mes || !ano) return
+    if (chaveComparavel(ano, mes) < minimo || chaveComparavel(ano, mes) > maximo) return
+    if (d.produtos?.grupo_everest) grupos.add(d.produtos.grupo_everest)
+  })
+  return [...grupos].sort()
 }
 
 // Pedido do Felipe (02/10/2026, depois de ver a primeira versão): loja NÃO é coluna — é FILTRO
