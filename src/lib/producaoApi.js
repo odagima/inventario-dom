@@ -26,12 +26,16 @@ const SELECT_PRODUCAO = `
 // finaliza (troca de turno, preparo que atravessa dias). Por isso a lista NÃO filtra por usuário.
 // `frenteId` é opcional — filtra pra só a frente de quem está vendo, quando fizer sentido na tela.
 // Só traz produções que JÁ têm pelo menos uma entrada (as "planejadas" sem item vivem em
-// `listarProducoesPlanejadas`, pra não misturar "a fazer" com "sendo feita agora").
+// `listarProducoesPlanejadas`, pra não misturar "a fazer" com "sendo feita agora") E que sejam
+// RAIZ da cadeia (sem `producao_origem_id`) — desde que a tela de Produção passou a mostrar a
+// cadeia inteira numa página só (§ pedido do Felipe, 02/10/2026, ver `buscarCadeiaProducao`), uma
+// etapa intermediária não aparece mais como item separado aqui, só dentro da cadeia da sua raiz.
 export async function listarProducoesEmAndamento(frenteId) {
   let q = supabase
     .from('producoes')
     .select(SELECT_PRODUCAO)
     .eq('status', 'em_andamento')
+    .is('producao_origem_id', null)
   if (frenteId) q = q.eq('frente_id', frenteId)
   const { data, error } = await q.order('iniciada_em', { ascending: true }) // a mais antiga primeiro: é a que está esperando há mais tempo
   if (error) throw error
@@ -141,6 +145,44 @@ export async function adicionarItemProducao({ producaoId, papel, codigoEverest, 
 export async function removerItemProducao(itemId) {
   const { error } = await supabase.from('producoes_itens').delete().eq('id', itemId)
   if (error) throw error
+}
+
+// Corrigir um peso já lançado (§ pedido do Felipe, 02/10/2026) — antes só dava pra apagar e
+// relançar; editar direto é mais rápido e não perde o horário/usuário do lançamento original.
+export async function editarQuantidadeItemProducao(itemId, novaQuantidade) {
+  const { error } = await supabase.from('producoes_itens').update({ quantidade: Number(novaQuantidade) }).eq('id', itemId)
+  if (error) throw error
+}
+
+export async function buscarProducaoPorId(id) {
+  const { data, error } = await supabase.from('producoes').select(SELECT_PRODUCAO).eq('id', id).single()
+  if (error) throw error
+  return data
+}
+
+export async function listarProducoesPorOrigem(origemIds) {
+  if (!origemIds?.length) return []
+  const { data, error } = await supabase.from('producoes').select(SELECT_PRODUCAO).in('producao_origem_id', origemIds)
+  if (error) throw error
+  return data || []
+}
+
+// Monta a cadeia inteira (raiz + todos os descendentes, de qualquer profundidade) a partir de
+// QUALQUER produção dela — usado pela tela única de lançamento (§ pedido do Felipe, 02/10/2026:
+// "abre a tela, coloca o insumo base, e ele fica como cabeçalho; embaixo ficam os derivados e
+// subprodutos"). Sobe até a raiz, depois desce juntando todo mundo que descende dela.
+export async function buscarCadeiaProducao(producaoId) {
+  let atual = await buscarProducaoPorId(producaoId)
+  while (atual.producao_origem_id) atual = await buscarProducaoPorId(atual.producao_origem_id)
+  const raiz = atual
+  const todas = [raiz]
+  let fronteira = [raiz.id]
+  while (fronteira.length) {
+    const filhos = await listarProducoesPorOrigem(fronteira)
+    todas.push(...filhos)
+    fronteira = filhos.map((f) => f.id)
+  }
+  return todas
 }
 
 // Finalizar exige pelo menos uma saída — senão o evento não mede nada, que é o único motivo de

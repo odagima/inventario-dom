@@ -20,9 +20,9 @@ export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarPr
         <button style={{ padding: '18px', fontSize: 16 }} onClick={onEntrarRequisicao}>
           Requisição / Transferência
         </button>
-        <button style={{ padding: '18px', fontSize: 16 }} onClick={onEntrarProdutividade}>
-          Produtividade
-        </button>
+        {/* Produtividade ocultada a pedido do Felipe (02/10/2026) — "não vamos usar isso por
+            agora". onEntrarProdutividade continua recebido pra não quebrar o App.jsx; é só
+            reativar o botão quando for retomado. */}
         {podeCadastro && (
           <button style={{ padding: '18px', fontSize: 16 }} onClick={onAbrirCadastro}>Cadastros</button>
         )}

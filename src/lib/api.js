@@ -386,8 +386,8 @@ export async function buscarProdutosPorCategoriaPerda(termo, tiposItem) {
 }
 
 // Busca produtos por uma lista pontual de `codigo_everest` — usada pelo filtro inteligente da
-// Produção (ver `fatoresCorrecaoApi.descendentesDe`): a lista já vem pequena (uma família de
-// ficha técnica), então não precisa da paginação em lote de `buscarPorIdsEmLotes`.
+// Produção (ver `fatoresCorrecaoApi.filhosDiretos`): a lista já vem pequena (um passo do
+// processo), então não precisa da paginação em lote de `buscarPorIdsEmLotes`.
 export async function buscarProdutosPorCodigosEverest(codigos) {
   if (!codigos?.length) return []
   const { data, error } = await supabase
