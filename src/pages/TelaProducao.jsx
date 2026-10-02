@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import { CATEGORIAS_PERDA, LABEL_TURNO } from '../lib/perdas'
 import { listarFrentes } from '../lib/frentesApi'
-import { buscarFatoresCorrecao, calcularFCTeorico } from '../lib/fatoresCorrecaoApi'
+import { buscarFatoresCorrecao, calcularFCTeorico, descendentesDe, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
 import { registrarMovimento } from '../lib/estoqueMovimentosApi'
+import { buscarProdutosPorCodigosEverest } from '../lib/api'
 import {
   listarProducoesEmAndamento,
   listarProducoesPlanejadas,
@@ -421,16 +422,32 @@ function FormFechar({ producao, usuario, onMudou, onContinuar, onPronto, onErro 
   const [quantidade, setQuantidade] = useState('')
   const [salvando, setSalvando] = useState(false)
   const [confirmandoCancelar, setConfirmandoCancelar] = useState(false)
+  const [confirmando, setConfirmando] = useState(false)
   const [mapaFatores, setMapaFatores] = useState(null)
   const [esperados, setEsperados] = useState({}) // codigo_everest -> F.C. teórico esperado (0..∞, ~1 = em cima do previsto)
+  const [produtosFamilia, setProdutosFamilia] = useState([]) // itens que descendem da entrada na ficha técnica
+  const [modoFiltro, setModoFiltro] = useState(true) // true = só a família; false = "ver catálogo inteiro"
 
   const itens = producao.producoes_itens || []
   const entradas = itens.filter((i) => i.papel === 'entrada')
   const saidas = itens.filter((i) => i.papel === 'saida')
   const r = rendimentoDoEvento(producao)
   const qtd = Number(String(quantidade).replace(',', '.'))
+  const codigoEntrada = entradas[0]?.codigo_everest
+  const nomeEntrada = entradas[0]?.produtos?.nome || codigoEntrada || 'insumo'
 
   useEffect(() => { buscarFatoresCorrecao().then(setMapaFatores).catch((e) => onErro(e.message)) }, [onErro])
+
+  // Filtro inteligente (§ pedido do Felipe, 02/10/2026): ao escolher Mignon na entrada, não faz
+  // sentido oferecer frango a passarinho na saída. Lista só o que a ficha técnica diz que desce
+  // dessa entrada. Se a entrada ainda não tem fator cadastrado (família não mapeada), a lista fica
+  // vazia e a tela cai de volta no fluxo de busca de sempre — nunca bloqueia o lançamento.
+  useEffect(() => {
+    if (!mapaFatores || !codigoEntrada) return
+    const descendentes = [...descendentesDe(mapaFatores, codigoEntrada)]
+    if (!descendentes.length) { setProdutosFamilia([]); return }
+    buscarProdutosPorCodigosEverest(descendentes).then(setProdutosFamilia).catch(() => setProdutosFamilia([]))
+  }, [mapaFatores, codigoEntrada])
 
   // Esperado de cada item que já saiu — busca uma vez por código, não a cada render.
   useEffect(() => {
@@ -442,6 +459,12 @@ function FormFechar({ producao, usuario, onMudou, onContinuar, onPronto, onErro 
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapaFatores, saidas.length])
+
+  // Sanity-check na hora de digitar: se o peso implicaria mais bruto do que a produção recebeu de
+  // entrada, é quase sempre dedo errado (zero a mais, vírgula no lugar errado) — avisa antes de
+  // adicionar, sem bloquear (a pessoa pode confirmar mesmo assim, perda grande é uma possibilidade real).
+  const brutoImplicito = (mapaFatores && produto && qtd > 0) ? brutoEquivalente(mapaFatores, produto.codigo_everest, qtd) : null
+  const avisoBruto = brutoImplicito != null && r ? { valor: brutoImplicito, estourou: brutoImplicito > r.entrada * 1.15 } : null
 
   async function adicionar() {
     setSalvando(true)
@@ -506,14 +529,39 @@ function FormFechar({ producao, usuario, onMudou, onContinuar, onPronto, onErro 
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>Só o líquido — o bruto já foi pesado na abertura, uma vez só.</p>
         {!produto ? (
           <>
-            <div className="segmented">
-              {CATEGORIAS.map((c) => (
-                <button key={c.valor} type="button" onClick={() => setCategoria(c)} className={categoria?.valor === c.valor ? 'active' : ''}>
-                  {c.label}
+            {produtosFamilia.length > 0 && (
+              <div className="segmented">
+                <button type="button" onClick={() => setModoFiltro(true)} className={modoFiltro ? 'active' : ''}>
+                  Só o que leva {nomeEntrada}
                 </button>
-              ))}
-            </div>
-            <BuscaProdutoPerda categoria={categoria} onSelecionar={setProduto} />
+                <button type="button" onClick={() => setModoFiltro(false)} className={!modoFiltro ? 'active' : ''}>
+                  Catálogo inteiro
+                </button>
+              </div>
+            )}
+            {produtosFamilia.length > 0 && modoFiltro ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
+                {produtosFamilia.map((p) => (
+                  <button
+                    key={p.id} type="button" onClick={() => setProduto(p)} className="card"
+                    style={{ padding: '14px 10px', textAlign: 'left', fontSize: 13.5, fontWeight: 500 }}
+                  >
+                    {p.nome}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="segmented">
+                  {CATEGORIAS.map((c) => (
+                    <button key={c.valor} type="button" onClick={() => setCategoria(c)} className={categoria?.valor === c.valor ? 'active' : ''}>
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+                <BuscaProdutoPerda categoria={categoria} onSelecionar={setProduto} />
+              </>
+            )}
           </>
         ) : (
           <>
@@ -528,6 +576,12 @@ function FormFechar({ producao, usuario, onMudou, onContinuar, onPronto, onErro 
                 value={quantidade} onChange={(e) => setQuantidade(e.target.value)}
                 name="producao-saida" autoComplete="off"
               />
+              {avisoBruto && (
+                <p className="muted" style={{ margin: '4px 0 0', fontSize: 11.5, color: avisoBruto.estourou ? 'var(--warning)' : 'var(--text-secondary)' }}>
+                  Equivale a ~{fmt(avisoBruto.valor)} {r.unidade} de {nomeEntrada} bruto
+                  {avisoBruto.estourou && ` — essa produção só teve ${fmt(r.entrada)} ${r.unidade} de entrada, confere o peso`}
+                </p>
+              )}
             </div>
             <button className="primary" onClick={adicionar} disabled={salvando || !(qtd > 0)} style={{ width: '100%' }}>
               {salvando ? 'Salvando…' : 'Adicionar'}
@@ -585,14 +639,34 @@ function FormFechar({ producao, usuario, onMudou, onContinuar, onPronto, onErro 
         </div>
       )}
 
-      <button
-        className="primary"
-        onClick={finalizarComMovimento}
-        disabled={salvando || saidas.length === 0}
-        style={{ width: '100%', padding: 14 }}
-      >
-        Finalizar produção
-      </button>
+      {!confirmando ? (
+        <button
+          className="primary"
+          onClick={() => setConfirmando(true)}
+          disabled={salvando || saidas.length === 0}
+          style={{ width: '100%', padding: 14 }}
+        >
+          Finalizar produção
+        </button>
+      ) : (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <p style={{ margin: 0, fontWeight: 600 }}>Confere antes de fechar — isso grava no saldo da frente</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {saidas.map((s) => (
+              <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>
+                <span style={{ minWidth: 0 }}>{s.produtos?.nome || s.codigo_everest}</span>
+                <span style={{ fontWeight: 600, flexShrink: 0 }}>{fmt(s.quantidade)} {s.unidade}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button onClick={() => setConfirmando(false)} disabled={salvando} style={{ flex: 1 }}>Revisar</button>
+            <button className="primary" onClick={finalizarComMovimento} disabled={salvando} style={{ flex: 1 }}>
+              {salvando ? 'Finalizando…' : 'Confirmar e finalizar'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {!confirmandoCancelar ? (
         <button className="ghost" onClick={() => setConfirmandoCancelar(true)} style={{ color: 'var(--danger)' }}>

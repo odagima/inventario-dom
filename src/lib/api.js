@@ -385,6 +385,21 @@ export async function buscarProdutosPorCategoriaPerda(termo, tiposItem) {
   return data
 }
 
+// Busca produtos por uma lista pontual de `codigo_everest` — usada pelo filtro inteligente da
+// Produção (ver `fatoresCorrecaoApi.descendentesDe`): a lista já vem pequena (uma família de
+// ficha técnica), então não precisa da paginação em lote de `buscarPorIdsEmLotes`.
+export async function buscarProdutosPorCodigosEverest(codigos) {
+  if (!codigos?.length) return []
+  const { data, error } = await supabase
+    .from('produtos')
+    .select('*')
+    .eq('ativo', true)
+    .in('codigo_everest', codigos)
+    .order('nome')
+  if (error) throw error
+  return data || []
+}
+
 // `usuario`: quem EDITOU esse lançamento por último — sobrescreve o `usuario` de quem lançou
 // originalmente. É um campo de "última edição", não um histórico completo (não temos log de
 // versões), mas já resolve a dúvida mais comum ("quem alterou esse valor por último").

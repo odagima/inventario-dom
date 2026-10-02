@@ -48,3 +48,33 @@ export function calcularFCTeorico(mapa, codigoEverest, liquidoReal, brutoTotalRe
   if (!(brutoImplicito > 0)) return null
   return liquidoReal / brutoImplicito
 }
+
+// Quanto de insumo cru uma quantidade de item porcionado implicaria, seguindo a mesma cadeia —
+// é o inverso de `shareEsperadoAcumulado` (que é a razão porcionado/cru esperada). Serve pra
+// avisar na hora de digitar: se o peso digitado implicaria um bruto maior do que a entrada real
+// da produção, é sinal forte de dedo errado (zero a mais, vírgula no lugar errado) — pega esse
+// tipo de erro sem precisar entender "F.C." (§ pedido do Felipe, 02/10/2026).
+export function brutoEquivalente(mapa, codigoEverest, quantidade) {
+  const share = shareEsperadoAcumulado(mapa, codigoEverest)
+  if (!(share > 0) || share === 1) return null // share 1 = item não mapeado em fatores_correcao, sem base de comparação
+  return quantidade / share
+}
+
+// Pedido do Felipe (02/10/2026): ao escolher "Mignon" na entrada, só mostrar na saída o que de
+// fato é derivado do Mignon (toda a família da ficha técnica), não o catálogo de pré-preparo
+// inteiro — "eu não vou fazer frango a passarinho". `mapa` é child->{pai, fator} (ver
+// `buscarFatoresCorrecao`); aqui andamos na direção CONTRÁRIA (de pai pra filho), olhando se
+// `codigoRaiz` aparece em algum ponto da cadeia de pais de cada item do mapa.
+export function descendentesDe(mapa, codigoRaiz) {
+  const resultado = new Set()
+  Object.keys(mapa).forEach((filho) => {
+    let atual = filho
+    const visitados = new Set()
+    while (mapa[atual] && !visitados.has(atual)) {
+      visitados.add(atual)
+      atual = mapa[atual].pai
+      if (atual === codigoRaiz) { resultado.add(filho); break }
+    }
+  })
+  return resultado
+}
