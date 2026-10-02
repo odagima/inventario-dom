@@ -78,3 +78,53 @@ export function descendentesDe(mapa, codigoRaiz) {
   })
   return resultado
 }
+
+// Pedido do Felipe (02/10/2026): "PP FILET MIGNON CABECA E RABO PARA LIMPAR" é claramente da
+// família do Mignon, mas não tem ficha técnica NEM fator cadastrado ainda — e a preocupação dele é
+// que exigir isso de TODO item faria o cadastro virar um projeto gigante e o time abandonar. Esse
+// é o reforço automático que não depende de nenhum cadastro: compara palavras do NOME.
+//
+// Estratégia: tira do nome as palavras genéricas (espécie, unidade, estado de preparo — que mudam
+// de um degrau pro outro da ficha, ex. "BOVINO ... PEÇA" vira só "PP ...") e compara o que sobra
+// ("núcleo"). Se todo o núcleo da entrada aparece no nome do candidato, ele entra na família.
+// Funciona em cima do nome que já existe hoje, sem exigir ninguém cadastrar nada antes.
+const PALAVRAS_GENERICAS = new Set([
+  'PP', 'KG', 'UN', 'UND', 'CX', 'PC',
+  'BOVINO', 'BOVINA', 'SUINO', 'SUINA', 'AVE', 'FRANGO', 'PEIXE',
+  'PECA', 'PECAS', 'CRU', 'CRUA', 'CRUS', 'CRUAS',
+  'PARA', 'DE', 'DO', 'DA', 'DOS', 'DAS', 'E', 'OU', 'COM', 'SEM',
+  'LIMPEZA', 'LIMPAR', 'LIMPO', 'LIMPA',
+  'PORCIONADO', 'PORCIONADA', 'PORCIONAMENTO'
+])
+
+function nucleoDoNome(nome) {
+  return new Set(
+    String(nome || '')
+      .toUpperCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .split(/[^A-Z0-9]+/)
+      .filter((t) => t.length > 1 && !PALAVRAS_GENERICAS.has(t))
+  )
+}
+
+export function pareceDaMesmaFamilia(nomeEntrada, nomeCandidato) {
+  const nucleo = nucleoDoNome(nomeEntrada)
+  if (!nucleo.size) return false
+  const candidatoTokens = nucleoDoNome(nomeCandidato)
+  for (const t of nucleo) if (!candidatoTokens.has(t)) return false
+  return true
+}
+
+// Busca só o necessário: filtra no banco pela palavra mais específica do núcleo (a mais longa —
+// heurística simples, mas evita trazer o catálogo inteiro, o mesmo erro de performance já visto
+// antes em `listarGruposEverestComContagem`) e só então confere o núcleo inteiro em JS.
+export async function buscarProdutosMesmaFamilia(nomeEntrada, tiposItem) {
+  const nucleo = [...nucleoDoNome(nomeEntrada)]
+  if (!nucleo.length) return []
+  const tokenMaisEspecifico = nucleo.reduce((a, b) => (b.length > a.length ? b : a))
+  let q = supabase.from('produtos').select('*').eq('ativo', true).ilike('nome', `%${tokenMaisEspecifico}%`)
+  if (tiposItem?.length) q = q.in('tipo_item', tiposItem)
+  const { data, error } = await q.limit(100)
+  if (error) throw error
+  return (data || []).filter((p) => pareceDaMesmaFamilia(nomeEntrada, p.nome))
+}

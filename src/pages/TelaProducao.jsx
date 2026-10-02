@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import { CATEGORIAS_PERDA, LABEL_TURNO } from '../lib/perdas'
 import { listarFrentes } from '../lib/frentesApi'
-import { buscarFatoresCorrecao, calcularFCTeorico, descendentesDe, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
+import { buscarFatoresCorrecao, calcularFCTeorico, descendentesDe, brutoEquivalente, buscarProdutosMesmaFamilia } from '../lib/fatoresCorrecaoApi'
 import { registrarMovimento } from '../lib/estoqueMovimentosApi'
 import { buscarProdutosPorCodigosEverest } from '../lib/api'
 import {
@@ -439,15 +439,34 @@ function FormFechar({ producao, usuario, onMudou, onContinuar, onPronto, onErro 
   useEffect(() => { buscarFatoresCorrecao().then(setMapaFatores).catch((e) => onErro(e.message)) }, [onErro])
 
   // Filtro inteligente (§ pedido do Felipe, 02/10/2026): ao escolher Mignon na entrada, não faz
-  // sentido oferecer frango a passarinho na saída. Lista só o que a ficha técnica diz que desce
-  // dessa entrada. Se a entrada ainda não tem fator cadastrado (família não mapeada), a lista fica
-  // vazia e a tela cai de volta no fluxo de busca de sempre — nunca bloqueia o lançamento.
+  // sentido oferecer frango a passarinho na saída. Combina dois sinais, nenhum dos dois exige
+  // cadastro extra pra funcionar: (1) a cadeia de fatores_correcao, quando já existe (mais precisa,
+  // também alimenta o F.C. teórico); (2) semelhança de NOME (`buscarProdutosMesmaFamilia`), que
+  // pega item que ainda não tem ficha técnica nem fator — ex. "PP FILET MIGNON CABEÇA E RABO PARA
+  // LIMPAR". Se nenhum dos dois achar nada, a lista fica vazia e a tela cai de volta no fluxo de
+  // busca de sempre — nunca bloqueia o lançamento.
   useEffect(() => {
-    if (!mapaFatores || !codigoEntrada) return
-    const descendentes = [...descendentesDe(mapaFatores, codigoEntrada)]
-    if (!descendentes.length) { setProdutosFamilia([]); return }
-    buscarProdutosPorCodigosEverest(descendentes).then(setProdutosFamilia).catch(() => setProdutosFamilia([]))
-  }, [mapaFatores, codigoEntrada])
+    if (!codigoEntrada) return
+    let cancelado = false
+    async function montarFamilia() {
+      const candidatos = new Map()
+      if (mapaFatores) {
+        const descendentes = [...descendentesDe(mapaFatores, codigoEntrada)]
+        if (descendentes.length) {
+          const porFator = await buscarProdutosPorCodigosEverest(descendentes)
+          porFator.forEach((p) => candidatos.set(p.id, p))
+        }
+      }
+      if (nomeEntrada) {
+        const tiposItem = [...(CAT_INSUMO?.tiposItem || []), ...(CAT_PP?.tiposItem || [])]
+        const porNome = await buscarProdutosMesmaFamilia(nomeEntrada, tiposItem)
+        porNome.forEach((p) => { if (p.codigo_everest !== codigoEntrada) candidatos.set(p.id, p) })
+      }
+      if (!cancelado) setProdutosFamilia([...candidatos.values()].sort((a, b) => a.nome.localeCompare(b.nome)))
+    }
+    montarFamilia().catch(() => { if (!cancelado) setProdutosFamilia([]) })
+    return () => { cancelado = true }
+  }, [mapaFatores, codigoEntrada, nomeEntrada])
 
   // Esperado de cada item que já saiu — busca uma vez por código, não a cada render.
   useEffect(() => {
