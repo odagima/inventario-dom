@@ -5,6 +5,13 @@ import { buscarProdutosAdmin, listarGruposEverestComContagem, listarUnidadesAdmi
 const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 const NOMES_MES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
 
+// Evita o clássico 1.2999999999999998 de ponto flutuante, e deixa toda quantidade com a mesma
+// quantidade de casas (pedido do Felipe).
+function fmt(n) {
+  if (n == null) return '—'
+  return Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 function rotuloMes(ano, mes) {
   return `${ano}-${String(mes).padStart(2, '0')}`
 }
@@ -145,6 +152,22 @@ export default function Saldo() {
     })
   }
 
+  // Arrastar a tabela pro lado com o mouse (pedido do Felipe) — sem isso, só dava pra rolar pelo
+  // scrollbar embaixo ou trackpad. `arrastando` evita que um simples clique (sem mover o mouse)
+  // seja confundido com arraste.
+  const scrollRef = useRef(null)
+  const arrastoRef = useRef(null)
+  function iniciarArrasto(e) {
+    arrastoRef.current = { x: e.clientX, scrollLeft: scrollRef.current.scrollLeft, arrastando: false }
+  }
+  function moverArrasto(e) {
+    if (!arrastoRef.current) return
+    const dx = e.clientX - arrastoRef.current.x
+    if (Math.abs(dx) > 3) arrastoRef.current.arrastando = true
+    scrollRef.current.scrollLeft = arrastoRef.current.scrollLeft - dx
+  }
+  function pararArrasto() { arrastoRef.current = null }
+
   const meses = mesesDoPeriodo({ mes: inicioMes, ano: inicioAno }, { mes: fimMes, ano: fimAno })
   const dadosGraficoItem = meses.map((m) => ({ mes: labelMes(m), quantidade: porMesItem.get(m) ?? 0 }))
 
@@ -241,42 +264,51 @@ export default function Saldo() {
           {meses.map((m) => (
             <div key={m} className="list-item">
               <span>{labelMes(m)}</span>
-              <span>{porMesItem.get(m) ?? '—'}</span>
+              <span>{fmt(porMesItem.get(m))}</span>
             </div>
           ))}
         </div>
       )}
 
       {modo === 'grupoEverest' && grupoEverestSelecionado && !carregando && (
-        <div className="card" style={{ overflowX: 'auto' }}>
+        <div className="card">
           <p style={{ margin: '0 0 14px', fontWeight: 600, fontSize: 15 }}>
             Saldo por item — {grupoEverestSelecionado}
           </p>
           {saldoGrupo.length === 0 ? (
             <p className="muted">Nenhum item desse grupo foi contado nesse filtro ainda. Confere o período ou as lojas marcadas.</p>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                  <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Produto</th>
-                  {meses.map((m) => (
-                    <th key={m} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                      {labelMes(m)}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {saldoGrupo.map(({ produto, porMes }) => (
-                  <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
+            <div
+              ref={scrollRef}
+              onMouseDown={iniciarArrasto}
+              onMouseMove={moverArrasto}
+              onMouseUp={pararArrasto}
+              onMouseLeave={pararArrasto}
+              style={{ overflowX: 'auto', cursor: 'grab' }}
+            >
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, userSelect: 'none' }}>
+                <thead>
+                  <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
+                    <th style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, zIndex: 1 }}>Produto</th>
                     {meses.map((m) => (
-                      <td key={m} style={{ textAlign: 'right', padding: '8px' }}>{porMes.get(m) ?? '—'}</td>
+                      <th key={m} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                        {labelMes(m)}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {saldoGrupo.map(({ produto, porMes }) => (
+                    <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                      <td style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
+                      {meses.map((m) => (
+                        <td key={m} style={{ textAlign: 'right', padding: '8px' }}>{fmt(porMes.get(m))}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
