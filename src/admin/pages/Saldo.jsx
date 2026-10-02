@@ -6,6 +6,8 @@ function formatarData(iso) {
   return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
 }
 
+const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
+
 export default function Saldo() {
   const [modo, setModo] = useState('item') // 'item' | 'grupo' | 'grupoEverest'
 
@@ -22,7 +24,18 @@ export default function Saldo() {
   const [gruposEverest, setGruposEverest] = useState([])
   const [grupoEverestSelecionado, setGrupoEverestSelecionado] = useState('')
 
+  // Só vale pra "Por item" e "Grupo Everest" — são os dois modos de dentro do Inventário
+  // (tipo: 'mensal'). "Grupo de contagem" é semanal/diário/perdas/produção, mês de referência não
+  // se aplica do mesmo jeito.
+  const [mesFiltro, setMesFiltro] = useState(new Date().getMonth() + 1)
+  const [anoFiltro, setAnoFiltro] = useState(new Date().getFullYear())
+  const [semFiltroMes, setSemFiltroMes] = useState(false)
+
   const [carregando, setCarregando] = useState(false)
+
+  function filtroInventario() {
+    return { tipo: 'mensal', mes: semFiltroMes ? null : mesFiltro, ano: semFiltroMes ? null : anoFiltro }
+  }
 
   useEffect(() => {
     if (modo === 'grupo') listarGruposAdmin().then(setGrupos)
@@ -44,11 +57,24 @@ export default function Saldo() {
     setResultadosBusca([])
     setCarregando(true)
     try {
-      setSerieItem(await buscarSaldoItem(produto.id))
+      setSerieItem(await buscarSaldoItem(produto.id, filtroInventario()))
     } finally {
       setCarregando(false)
     }
   }
+
+  // Recarrega quando o mês/ano muda, com produto já selecionado.
+  useEffect(() => {
+    if (modo === 'item' && produtoSelecionado) {
+      setCarregando(true)
+      buscarSaldoItem(produtoSelecionado.id, filtroInventario()).then(setSerieItem).finally(() => setCarregando(false))
+    }
+    if (modo === 'grupoEverest' && grupoEverestSelecionado) {
+      setCarregando(true)
+      buscarSaldoPorGrupoEverest(grupoEverestSelecionado, filtroInventario()).then(setSaldoGrupo).finally(() => setCarregando(false))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mesFiltro, anoFiltro, semFiltroMes])
 
   async function handleSelecionarGrupo(id) {
     setGrupoId(id)
@@ -66,7 +92,7 @@ export default function Saldo() {
     if (!nome) return
     setCarregando(true)
     try {
-      setSaldoGrupo(await buscarSaldoPorGrupoEverest(nome))
+      setSaldoGrupo(await buscarSaldoPorGrupoEverest(nome, filtroInventario()))
     } finally {
       setCarregando(false)
     }
@@ -83,6 +109,27 @@ export default function Saldo() {
           <button className={modo === 'grupo' ? 'active' : ''} onClick={() => setModo('grupo')}>Grupo de contagem</button>
           <button className={modo === 'grupoEverest' ? 'active' : ''} onClick={() => setModo('grupoEverest')}>Grupo Everest</button>
         </div>
+
+        {(modo === 'item' || modo === 'grupoEverest') && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap', marginBottom: 14 }}>
+            <div style={{ flex: 2, minWidth: 140 }}>
+              <label className="muted">Mês</label>
+              <select value={mesFiltro} onChange={(e) => setMesFiltro(Number(e.target.value))} disabled={semFiltroMes}>
+                {NOMES_MES_SALDO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: 1, minWidth: 100 }}>
+              <label className="muted">Ano</label>
+              <select value={anoFiltro} onChange={(e) => setAnoFiltro(Number(e.target.value))} disabled={semFiltroMes}>
+                {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, paddingBottom: 10 }}>
+              <input type="checkbox" checked={semFiltroMes} onChange={(e) => setSemFiltroMes(e.target.checked)} style={{ width: 'auto' }} />
+              Todos os meses
+            </label>
+          </div>
+        )}
 
         {modo === 'item' && (
           <div style={{ position: 'relative' }}>

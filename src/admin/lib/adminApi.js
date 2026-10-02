@@ -598,9 +598,22 @@ export async function reprocessarSiglasExistentes(onProgresso) {
 }
 
 // ---------- Saldo comparativo (item / grupo ao longo das sessões) ----------
-export async function buscarSaldoItem(produtoId) {
+// `tipo`/`mes`/`ano` opcionais — pedido do Felipe: o Saldo dentro do Inventário estava puxando
+// TODO tipo de sessão (semanal, perdas, produção) misturado, e nunca filtrava por mês nenhum.
+// `!inner` no embed vira um filtro de verdade na query (não só nos itens já trazidos) — sem ele,
+// `.eq('sessoes_contagem.tipo', ...)` é ignorado pelo PostgREST e filtra só a navegação, não a
+// contagem de linhas. Sem `tipo`/`mes`/`ano`, o comportamento continua igual ao de antes (todo
+// histórico, qualquer tipo) — é assim que o modo "Grupo de contagem" (semanal/diário) usa.
+export async function buscarSaldoItem(produtoId, { tipo, mes, ano } = {}) {
+  let query = supabase
+    .from('itens_contagem')
+    .select('quantidade, sessoes_contagem!inner(id, iniciada_em, tipo, mes_referencia, ano_referencia, unidades(nome))')
+    .eq('produto_id', produtoId)
+  if (tipo) query = query.eq('sessoes_contagem.tipo', tipo)
+  if (mes) query = query.eq('sessoes_contagem.mes_referencia', mes)
+  if (ano) query = query.eq('sessoes_contagem.ano_referencia', ano)
   const [{ data: contagensAtuais, error: e1 }, { data: historico, error: e2 }] = await Promise.all([
-    supabase.from('itens_contagem').select('quantidade, sessoes_contagem(id, iniciada_em, tipo, unidades(nome))').eq('produto_id', produtoId),
+    query,
     supabase.from('contagens_historicas').select('quantidade, registrado_em, local_original').eq('produto_id', produtoId)
   ])
   if (e1) throw e1
@@ -618,6 +631,13 @@ export async function buscarSaldoItem(produtoId) {
 
   const doHistorico = historico
     .filter((h) => h.registrado_em)
+    // histórico não tem `tipo` nem mês/ano de referência — só dá pra filtrar pela data real do
+    // registro. Sem mes/ano pedido, mantém tudo (igual sempre foi).
+    .filter((h) => {
+      if (!mes && !ano) return true
+      const d = new Date(h.registrado_em)
+      return (!mes || d.getMonth() + 1 === mes) && (!ano || d.getFullYear() === ano)
+    })
     .map((h) => ({
       sessaoId: null,
       data: h.registrado_em,
@@ -636,14 +656,18 @@ export async function listarGruposEverest() {
   return [...new Set(produtos.map((p) => p.grupo_everest))].sort()
 }
 
-export async function buscarSaldoPorGrupoEverest(grupoEverest) {
+// `mes`/`ano` opcionais — "Saldo por item" dentro do Inventário sempre manda `tipo: 'mensal'`
+// pra não misturar com contagem semanal/perdas/produção (ver `buscarSaldoItem`).
+export async function buscarSaldoPorGrupoEverest(grupoEverest, filtro = {}) {
   const produtos = await buscarTodasAsLinhas(() =>
     supabase.from('produtos').select('id, nome, codigo_everest').eq('grupo_everest', grupoEverest)
   )
-  const resultados = await Promise.all(produtos.map(async (p) => ({ produto: p, serie: await buscarSaldoItem(p.id) })))
+  const resultados = await Promise.all(produtos.map(async (p) => ({ produto: p, serie: await buscarSaldoItem(p.id, filtro) })))
   return resultados
 }
 
+// Sem filtro de tipo de propósito: "Grupo de contagem" é o agrupamento de semanal/diário/perdas/
+// produção (ver SelecaoUnidade.jsx) — não é do Inventário, então continua mostrando todo tipo.
 export async function buscarSaldoGrupo(grupoId) {
   const { data: itensGrupo, error } = await supabase
     .from('grupos_contagem_itens')
@@ -3668,6 +3692,33 @@ export async function editarQuantidadeItemContagem(itemId, novaQuantidade, quemE
     }
     throw error
   }
+}
+
+// Pedido do Felipe: às vezes o lançamento foi feito no produto errado — em vez de apagar e
+// recontar, troca qual produto essa linha representa. `usuario`/`registrado_em` atualizam pelo
+// mesmo motivo de `editarQuantidadeItemContagem` (não deixar o histórico mentindo).
+export async function trocarProdutoItemContagem(itemId, novoProdutoId, quemEditou = null) {
+  if (!itemId) throw new Error('Lançamento não identificado.')
+  if (!novoProdutoId) throw new Error('Escolha o produto certo antes de trocar.')
+  const dados = { produto_id: novoProdutoId }
+  if (quemEditou) dados.usuario = `${quemEditou} (corrigido)`
+  const { error } = await supabase.from('itens_contagem').update(dados).eq('id', itemId)
+  if (error) {
+    if (ehColunaAusente(error)) {
+      const { error: e2 } = await supabase.from('itens_contagem').update({ produto_id: novoProdutoId }).eq('id', itemId)
+      if (e2) throw e2
+      return
+    }
+    throw error
+  }
+}
+
+// Apaga só esse lançamento (não a sessão inteira) — pedido do Felipe pra tirar um item contado
+// por engano sem precisar apagar a contagem toda e recontar tudo de novo.
+export async function removerItemContagem(itemId) {
+  if (!itemId) throw new Error('Lançamento não identificado.')
+  const { error } = await supabase.from('itens_contagem').delete().eq('id', itemId)
+  if (error) throw error
 }
 
 // 27/08/2026 (§42), pedido do Felipe: editar o nome do funcionário em Configuração → Usuários.

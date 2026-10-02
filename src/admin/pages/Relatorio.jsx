@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { editarQuantidadeItemContagem, listarSessoes, buscarRelatorioSessao, atualizarReferenciaSessao, atualizarDataReferenciaSessao, atualizarTurnoSessao, atualizarUnidadeSessao, apagarSessao, reabrirSessao, finalizarSessaoAdmin, listarUnidadesAdmin, buscarDadosParaExportEverest, buscarResumoParaExportEverest } from '../lib/adminApi'
+import { editarQuantidadeItemContagem, trocarProdutoItemContagem, removerItemContagem, buscarProdutosAdmin, listarSessoes, buscarRelatorioSessao, atualizarReferenciaSessao, atualizarDataReferenciaSessao, atualizarTurnoSessao, atualizarUnidadeSessao, apagarSessao, reabrirSessao, finalizarSessaoAdmin, listarUnidadesAdmin, buscarDadosParaExportEverest, buscarResumoParaExportEverest } from '../lib/adminApi'
 import { registrarSaidaContagem, listarSaidasDaSessao, removerSaidaContagem } from '../../lib/api'
 import { useEscParaFechar } from '../lib/hooks'
 import { LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../../lib/perdas'
@@ -174,19 +174,75 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
 
   useEffect(() => { carregarSessoes() }, [])
 
-  // 27/08/2026 (§42): edição inline da quantidade de um lançamento.
-  const [editandoItem, setEditandoItem] = useState(null)
-  const [qtdEditada, setQtdEditada] = useState('')
-  const [erroEdicao, setErroEdicao] = useState('')
+  // 01/10/2026, pedido do Felipe: um botão "Editar" só, com as 3 ações que hoje só dava pra fazer
+  // apagando a sessão inteira (trocar o produto, corrigir a quantidade) ou nem dava (excluir só um
+  // lançamento). `aba` escolhe qual das 3 está aberta dentro do mesmo modal.
+  const [itemEditando, setItemEditando] = useState(null)
+  const [abaEdicaoItem, setAbaEdicaoItem] = useState('quantidade') // 'quantidade' | 'produto' | 'excluir'
+  const [qtdEdicaoItem, setQtdEdicaoItem] = useState('')
+  const [termoTrocaProduto, setTermoTrocaProduto] = useState('')
+  const [resultadosTrocaProduto, setResultadosTrocaProduto] = useState([])
+  const [erroEdicaoItem, setErroEdicaoItem] = useState('')
+  const [salvandoEdicaoItem, setSalvandoEdicaoItem] = useState(false)
+  const buscaTrocaRef = useRef(null)
 
-  async function salvarQuantidade(l) {
-    setErroEdicao('')
+  function abrirEdicaoItem(l) {
+    setItemEditando(l)
+    setAbaEdicaoItem('quantidade')
+    setQtdEdicaoItem(String(l.quantidade ?? ''))
+    setTermoTrocaProduto('')
+    setResultadosTrocaProduto([])
+    setErroEdicaoItem('')
+  }
+
+  useEffect(() => {
+    clearTimeout(buscaTrocaRef.current)
+    if (termoTrocaProduto.trim().length < 2) { setResultadosTrocaProduto([]); return }
+    buscaTrocaRef.current = setTimeout(async () => {
+      setResultadosTrocaProduto((await buscarProdutosAdmin(termoTrocaProduto)).slice(0, 8))
+    }, 250)
+    return () => clearTimeout(buscaTrocaRef.current)
+  }, [termoTrocaProduto])
+
+  async function salvarQuantidade() {
+    setErroEdicaoItem('')
+    setSalvandoEdicaoItem(true)
     try {
-      await editarQuantidadeItemContagem(l.id, String(qtdEditada).replace(',', '.'))
-      setEditandoItem(null)
-      await abrirSessao(sessaoAberta) // recarrega o relatório com o valor novo
+      await editarQuantidadeItemContagem(itemEditando.id, String(qtdEdicaoItem).replace(',', '.'))
+      setItemEditando(null)
+      await recarregarAberto() // recarrega o relatório com o valor novo
     } catch (e) {
-      setErroEdicao(e.message)
+      setErroEdicaoItem(e.message)
+    } finally {
+      setSalvandoEdicaoItem(false)
+    }
+  }
+
+  async function salvarTrocaProduto(novoProduto) {
+    setErroEdicaoItem('')
+    setSalvandoEdicaoItem(true)
+    try {
+      await trocarProdutoItemContagem(itemEditando.id, novoProduto.id)
+      setItemEditando(null)
+      await recarregarAberto()
+    } catch (e) {
+      setErroEdicaoItem(e.message)
+    } finally {
+      setSalvandoEdicaoItem(false)
+    }
+  }
+
+  async function confirmarExclusaoItem() {
+    setErroEdicaoItem('')
+    setSalvandoEdicaoItem(true)
+    try {
+      await removerItemContagem(itemEditando.id)
+      setItemEditando(null)
+      await recarregarAberto()
+    } catch (e) {
+      setErroEdicaoItem(e.message)
+    } finally {
+      setSalvandoEdicaoItem(false)
     }
   }
 
@@ -206,13 +262,76 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
     }
   }
 
+  // Pedido do Felipe: quando a mesma pessoa tem mais de uma sessão na mesma loja/mês (contagem
+  // fragmentada — começou, travou, começou de nova etc.), abre tudo junto numa visão só. Isso é
+  // SÓ DE EXIBIÇÃO: cada linha continua marcada com a sessão de origem (`_sessaoId`), e
+  // Editar/Saída sempre agem em cima do lançamento específico — nada no banco é unificado.
+  function chaveGrupoUsuario(sessoesDoGrupo) {
+    return sessoesDoGrupo.map((s) => s.id).sort().join(',')
+  }
+
+  async function abrirGrupoUsuario(sessoesDoGrupo, infoGrupo) {
+    const chave = chaveGrupoUsuario(sessoesDoGrupo)
+    if (!sessaoAberta || sessaoAberta._chaveGrupo !== chave) setBuscaItem('')
+    const pseudo = {
+      _merged: true,
+      _chaveGrupo: chave,
+      _sessoesOriginais: sessoesDoGrupo,
+      id: chave,
+      usuario: infoGrupo.usuario,
+      unidades: infoGrupo.unidades,
+      tipo: 'mensal',
+      mes_referencia: infoGrupo.mes,
+      ano_referencia: infoGrupo.ano,
+      status: sessoesDoGrupo.every((s) => s.status === 'finalizada') ? 'finalizada' : 'em_andamento',
+      iniciada_em: sessoesDoGrupo.map((s) => s.iniciada_em).sort()[0]
+    }
+    setSessaoAberta(pseudo)
+    setConfirmandoExcluir(false)
+    setCarregandoRelatorio(true)
+    try {
+      const listas = await Promise.all(sessoesDoGrupo.map(async (s) => {
+        const ls = await buscarRelatorioSessao(s.id)
+        return ls.map((l) => ({ ...l, _sessaoId: s.id }))
+      }))
+      const todas = listas.flat()
+      // Um item pendente em UMA sessão fragmentada mas já contado em OUTRA não é "pendente" de
+      // verdade — é só a lista esperada se repetindo por sessão. Não mostra a duplicata.
+      const produtosContados = new Set(todas.filter((l) => l.status !== 'pendente').map((l) => l.produto_id))
+      const vistosPendente = new Set()
+      const final = todas.filter((l) => {
+        if (l.status !== 'pendente') return true
+        if (produtosContados.has(l.produto_id)) return false
+        if (vistosPendente.has(l.produto_id)) return false
+        vistosPendente.add(l.produto_id)
+        return true
+      })
+      setLinhas(final)
+      const saidasTudo = await Promise.all(sessoesDoGrupo.map((s) => listarSaidasDaSessao(s.id).catch(() => [])))
+      setSaidas(saidasTudo.flat())
+    } finally {
+      setCarregandoRelatorio(false)
+    }
+  }
+
+  // Usado depois de editar/apagar um lançamento — recarrega do jeito certo, seja visão de uma
+  // sessão só ou visão combinada de várias.
+  async function recarregarAberto() {
+    if (sessaoAberta?._merged) await abrirGrupoUsuario(sessaoAberta._sessoesOriginais, { usuario: sessaoAberta.usuario, unidades: sessaoAberta.unidades, mes: sessaoAberta.mes_referencia, ano: sessaoAberta.ano_referencia })
+    else await abrirSessao(sessaoAberta)
+  }
+
   async function confirmarSaida() {
     const qtd = Number(String(saidaQtd).replace(',', '.'))
     if (!saidaItem || !isFinite(qtd) || qtd <= 0) return
+    // Na visão combinada, cada item sabe de qual sessão veio (`_sessaoId`) — a saída tem que
+    // entrar na sessão de origem certa, não numa sessão "combinada" que nem existe no banco.
+    const sessaoIdAlvo = saidaItem._sessaoId || sessaoAberta.id
     setSalvandoSaida(true)
     try {
-      await registrarSaidaContagem({ sessaoId: sessaoAberta.id, produtoId: saidaItem.produto_id, quantidade: qtd, motivo: saidaMotivo, usuario: 'admin' })
-      setSaidas(await listarSaidasDaSessao(sessaoAberta.id))
+      await registrarSaidaContagem({ sessaoId: sessaoIdAlvo, produtoId: saidaItem.produto_id, quantidade: qtd, motivo: saidaMotivo, usuario: 'admin' })
+      if (sessaoAberta?._merged) await recarregarAberto()
+      else setSaidas(await listarSaidasDaSessao(sessaoIdAlvo))
       setSaidaItem(null); setSaidaQtd(''); setSaidaMotivo('')
     } catch (e) {
       alert('Não consegui registrar a saída. Você já rodou o schema.sql atualizado no Supabase (cria a tabela saidas_contagem)? Detalhe: ' + e.message)
@@ -224,7 +343,8 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
   async function excluirSaida(id) {
     try {
       await removerSaidaContagem(id)
-      setSaidas(await listarSaidasDaSessao(sessaoAberta.id))
+      if (sessaoAberta?._merged) await recarregarAberto()
+      else setSaidas(await listarSaidasDaSessao(sessaoAberta.id))
     } catch (e) {
       alert('Não consegui remover a saída: ' + e.message)
     }
@@ -354,14 +474,27 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
           <button onClick={() => setSessaoAberta(null)} style={{ padding: '4px 8px', fontSize: 12 }}>voltar</button>
         </div>
         <p className="muted" style={{ margin: '0 0 14px' }}>
-          {LABEL_TIPO[sessaoAberta.tipo] || sessaoAberta.tipo} · {dataDaSessao(sessaoAberta)} · iniciada por {sessaoAberta.usuario}
-          {/* 17/08/2026: só mostra "enviada por" quando é diferente de quem abriu — sinal de que outra
-              pessoa continuou/enviou a sessão (ver migration_v10.sql, usuario_finalizou). */}
-          {sessaoAberta.usuario_finalizou && sessaoAberta.usuario_finalizou !== sessaoAberta.usuario && (
-            <> · <span style={{ color: 'var(--warning)' }}>enviada por {sessaoAberta.usuario_finalizou}</span></>
+          {sessaoAberta._merged ? (
+            <>Visão combinada de {sessaoAberta._sessoesOriginais.length} contagens de {sessaoAberta.usuario} · {dataDaSessao(sessaoAberta)}</>
+          ) : (
+            <>
+              {LABEL_TIPO[sessaoAberta.tipo] || sessaoAberta.tipo} · {dataDaSessao(sessaoAberta)} · iniciada por {sessaoAberta.usuario}
+              {/* 17/08/2026: só mostra "enviada por" quando é diferente de quem abriu — sinal de que outra
+                  pessoa continuou/enviou a sessão (ver migration_v10.sql, usuario_finalizou). */}
+              {sessaoAberta.usuario_finalizou && sessaoAberta.usuario_finalizou !== sessaoAberta.usuario && (
+                <> · <span style={{ color: 'var(--warning)' }}>enviada por {sessaoAberta.usuario_finalizou}</span></>
+              )}
+            </>
           )}
         </p>
 
+        {sessaoAberta._merged && (
+          <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>
+            Só a visualização juntou — cada lançamento continua gravado na sessão de origem dele. Pra corrigir loja/mês ou apagar/reabrir uma sessão específica, veja a lista de novo e abra ela sozinha.
+          </p>
+        )}
+
+        {!sessaoAberta._merged && (
         <div style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 12, marginBottom: 16 }}>
           <p className="muted" style={{ margin: '0 0 10px', fontWeight: 500 }}>Corrigir dados da sessão</p>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
@@ -446,6 +579,7 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
             </div>
           </div>
         </div>
+        )}
 
         {carregandoRelatorio ? (
           <p className="muted">Carregando…</p>
@@ -478,7 +612,6 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
               placeholder="Buscar item pelo nome…"
               style={{ width: '100%', marginBottom: 10 }}
             />
-            {erroEdicao && <p style={{ margin: '0 0 8px', color: 'var(--danger)', fontSize: 12 }}>{erroEdicao}</p>}
             <div style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 16 }}>
               {linhasContadasFiltradas.length === 0 && (
                 <p className="muted" style={{ padding: '8px 0' }}>Nenhum item encontrado pra "{buscaItem}".</p>
@@ -500,48 +633,26 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {editandoItem === l.id ? (
-                      <>
-                        <input
-                          value={qtdEditada}
-                          onChange={(e) => setQtdEditada(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') salvarQuantidade(l)
-                            if (e.key === 'Escape') setEditandoItem(null)
-                          }}
-                          autoFocus
-                          style={{ width: 90, textAlign: 'right' }}
-                        />
-                        <span className="muted" style={{ fontSize: 12 }}>{l.unidade_medida}</span>
-                        <button className="primary" onClick={() => salvarQuantidade(l)} style={{ padding: '4px 9px', fontSize: 12 }}>Salvar</button>
-                        <button onClick={() => setEditandoItem(null)} style={{ padding: '4px 9px', fontSize: 12 }}>Cancelar</button>
-                      </>
-                    ) : (
-                      <>
-                        {l.quantidade !== null && (
-                          <button
-                            onClick={() => { setEditandoItem(l.id); setQtdEditada(String(l.quantidade)); setErroEdicao('') }}
-                            title="Editar a quantidade contada"
-                            style={{ background: 'none', border: 'none', padding: 0, cursor: l.id ? 'pointer' : 'default', textDecoration: l.id ? 'underline dotted' : 'none', fontSize: 13 }}
-                            disabled={!l.id}
-                          >
-                            {l.quantidade} {l.unidade_medida}
-                          </button>
-                        )}
+                    {l.quantidade !== null && (
+                      <span style={{ fontSize: 13 }}>{l.quantidade} {l.unidade_medida}</span>
+                    )}
                     <span className="badge" style={{
                       background: l.status === 'contado' ? 'rgba(48,209,88,0.16)' : l.status === 'pendente' ? 'rgba(255,159,10,0.16)' : 'rgba(10,132,255,0.16)',
                       color: l.status === 'contado' ? 'var(--success)' : l.status === 'pendente' ? 'var(--warning)' : '#6cb2ff'
                     }}>
                       {LABEL_STATUS[l.status]}
                     </span>
+                    {l.id && (
+                      <button onClick={() => abrirEdicaoItem(l)} style={{ padding: '4px 9px', fontSize: 12 }}>
+                        Editar
+                      </button>
+                    )}
                     <button
                       onClick={() => { setSaidaItem(l); setSaidaQtd(''); setSaidaMotivo('') }}
                       style={{ padding: '4px 9px', fontSize: 12 }}
                     >
                       Saída
                     </button>
-                      </>
-                    )}
                   </div>
                 </div>
               ))}
@@ -582,7 +693,82 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
               </div>
             )}
 
-            {sessaoAberta.status === 'finalizada' && (
+            {itemEditando && (
+              <div onClick={() => !salvandoEdicaoItem && setItemEditando(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
+                <div className="card" style={{ maxWidth: 380, width: '100%' }} onClick={(e) => e.stopPropagation()}>
+                  <p style={{ marginTop: 0, fontWeight: 600 }}>Editar lançamento</p>
+                  <p className="muted" style={{ marginTop: 0 }}>{itemEditando.nome}</p>
+
+                  <div className="segmented" style={{ marginBottom: 14 }}>
+                    <button onClick={() => setAbaEdicaoItem('quantidade')} className={abaEdicaoItem === 'quantidade' ? 'active' : ''}>Quantidade</button>
+                    <button onClick={() => setAbaEdicaoItem('produto')} className={abaEdicaoItem === 'produto' ? 'active' : ''}>Produto</button>
+                    <button onClick={() => setAbaEdicaoItem('excluir')} className={abaEdicaoItem === 'excluir' ? 'active' : ''} style={{ color: 'var(--danger)' }}>Excluir</button>
+                  </div>
+
+                  {erroEdicaoItem && <p style={{ margin: '0 0 10px', color: 'var(--danger)', fontSize: 12 }}>{erroEdicaoItem}</p>}
+
+                  {abaEdicaoItem === 'quantidade' && (
+                    <>
+                      <label className="muted">Quantidade ({itemEditando.unidade_medida})</label>
+                      <input
+                        type="text" inputMode="decimal" autoFocus
+                        value={qtdEdicaoItem} onChange={(e) => setQtdEdicaoItem(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') salvarQuantidade() }}
+                        style={{ width: '100%' }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                        <button onClick={() => setItemEditando(null)} disabled={salvandoEdicaoItem} style={{ flex: 1 }}>Cancelar</button>
+                        <button className="primary" onClick={salvarQuantidade} disabled={salvandoEdicaoItem} style={{ flex: 1 }}>
+                          {salvandoEdicaoItem ? 'Salvando…' : 'Salvar'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {abaEdicaoItem === 'produto' && (
+                    <>
+                      <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>Isso troca pra qual produto esse lançamento conta — pra quando contou no item errado por engano.</p>
+                      <label className="muted">Buscar produto certo</label>
+                      <input
+                        type="text" autoFocus placeholder="Nome ou código Everest…"
+                        value={termoTrocaProduto} onChange={(e) => setTermoTrocaProduto(e.target.value)}
+                        style={{ width: '100%' }}
+                      />
+                      {resultadosTrocaProduto.length > 0 && (
+                        <div style={{ marginTop: 8, maxHeight: 180, overflowY: 'auto' }}>
+                          {resultadosTrocaProduto.map((p) => (
+                            <div
+                              key={p.id} className="list-item" style={{ cursor: salvandoEdicaoItem ? 'default' : 'pointer', padding: '8px 10px' }}
+                              onClick={() => !salvandoEdicaoItem && salvarTrocaProduto(p)}
+                            >
+                              <span>{p.nome}</span>
+                              <span className="muted">Everest {p.codigo_everest || '—'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', marginTop: 14 }}>
+                        <button onClick={() => setItemEditando(null)} disabled={salvandoEdicaoItem} style={{ flex: 1 }}>Cancelar</button>
+                      </div>
+                    </>
+                  )}
+
+                  {abaEdicaoItem === 'excluir' && (
+                    <>
+                      <p style={{ marginTop: 0, fontSize: 13 }}>Apagar só esse lançamento? Não apaga o resto da contagem, e não dá pra desfazer.</p>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                        <button onClick={() => setItemEditando(null)} disabled={salvandoEdicaoItem} style={{ flex: 1 }}>Cancelar</button>
+                        <button onClick={confirmarExclusaoItem} disabled={salvandoEdicaoItem} style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}>
+                          {salvandoEdicaoItem ? 'Apagando…' : 'Confirmar exclusão'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!sessaoAberta._merged && sessaoAberta.status === 'finalizada' && (
               <button
                 onClick={async () => { await reabrirSessao(sessaoAberta.id); setSessaoAberta((prev) => ({ ...prev, status: 'em_andamento' })) }}
                 style={{ width: '100%', marginBottom: 10 }}
@@ -596,7 +782,7 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                 voltar nela). Sem isso ela ficava contando pra sempre nos relatórios de CMV Semanal
                 e Consolidado (§ investigação do filet mignon, 09/09) até alguém excluir os dados
                 inteiros — o que jogaria fora a contagem física de verdade que já foi feita. */}
-            {sessaoAberta.status === 'em_andamento' && (
+            {!sessaoAberta._merged && sessaoAberta.status === 'em_andamento' && (
               <button
                 onClick={async () => { await finalizarSessaoAdmin(sessaoAberta.id); setSessaoAberta((prev) => ({ ...prev, status: 'finalizada' })) }}
                 style={{ width: '100%', marginBottom: 10 }}
@@ -605,7 +791,9 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
               </button>
             )}
 
-            {confirmandoExcluir ? (
+            {/* Apagar sessão inteira não existe em modo combinado de propósito — "qual das N
+                sessões?" é ambíguo demais pra um botão só. Abra a sessão específica pra apagar. */}
+            {!sessaoAberta._merged && (confirmandoExcluir ? (
               <div style={{ background: 'rgba(255,107,107,0.1)', borderRadius: 10, padding: 12 }}>
                 <p style={{ margin: '0 0 10px', fontSize: 13 }}>Apagar essa contagem inteira? Não dá pra desfazer.</p>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -619,7 +807,7 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
               <button onClick={() => setConfirmandoExcluir(true)} style={{ width: '100%', color: 'var(--danger)' }}>
                 Apagar essa contagem
               </button>
-            )}
+            ))}
           </>
         )}
       </div>
@@ -738,9 +926,28 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                   {porUsuario.map(([usuario, sessoesDoUsuario]) => (
                     <div key={usuario} style={{ marginBottom: 8, paddingLeft: 10 }}>
                       {porUsuario.length > 1 && <p className="muted" style={{ margin: '0 0 2px', fontSize: 11 }}>{usuario}</p>}
-                      <div>
-                        {sessoesDoUsuario.map((s) => <ItemSessao key={s.id} s={s} onAbrir={abrirSessao} dataDaSessao={dataDaSessao} />)}
-                      </div>
+                      {sessoesDoUsuario.length > 1 ? (
+                        // Mais de uma sessão da mesma pessoa, na mesma loja/mês — pedido do Felipe:
+                        // abre tudo junto numa visão só (ver `abrirGrupoUsuario`), em vez de um
+                        // cartão por sessão fragmentada.
+                        <div
+                          className="list-item"
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => abrirGrupoUsuario(sessoesDoUsuario, { usuario, unidades: sessoesDoUsuario[0].unidades, mes: grupo.mes, ano: grupo.ano })}
+                        >
+                          <div>
+                            <p style={{ margin: 0 }}>{usuario}</p>
+                            <p className="muted" style={{ margin: 0 }}>
+                              {sessoesDoUsuario.length} contagens · {sessoesDoUsuario.every((s) => s.status === 'finalizada') ? 'todas finalizadas' : 'alguma em andamento'}
+                            </p>
+                          </div>
+                          <span className="badge" style={{ background: 'rgba(10,132,255,0.16)', color: '#6cb2ff' }}>Ver junto</span>
+                        </div>
+                      ) : (
+                        <div>
+                          {sessoesDoUsuario.map((s) => <ItemSessao key={s.id} s={s} onAbrir={abrirSessao} dataDaSessao={dataDaSessao} />)}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
