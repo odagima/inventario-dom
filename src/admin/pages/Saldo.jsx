@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { buscarProdutosAdmin, listarGruposEverest, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
+import { buscarProdutosAdmin, listarGruposEverestComContagem, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
 
 const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 const NOMES_MES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
@@ -61,9 +61,21 @@ export default function Saldo() {
     })
   }, [])
 
+  // Lista de grupos só com o que teve contagem de verdade dentro do filtro atual (período +
+  // lojas) — refaz sempre que o filtro muda, não só quando troca de modo. Se o grupo que estava
+  // escolhido sumir da lista nova (filtro mudou e ele não tem mais dado), limpa a seleção em vez
+  // de deixar uma tela "selecionada" mas sem nada atrás.
   useEffect(() => {
-    if (modo === 'grupoEverest') listarGruposEverest().then(setGruposEverest)
-  }, [modo])
+    if (modo !== 'grupoEverest' || unidades.length === 0) return
+    listarGruposEverestComContagem(filtroAtual()).then((lista) => {
+      setGruposEverest(lista)
+      if (grupoEverestSelecionado && !lista.includes(grupoEverestSelecionado)) {
+        setGrupoEverestSelecionado('')
+        setSaldoGrupo([])
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo, unidades, inicioMes, inicioAno, fimMes, fimAno, unidadesSelecionadas])
 
   useEffect(() => {
     clearTimeout(debounceRef.current)

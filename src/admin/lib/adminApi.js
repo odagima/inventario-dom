@@ -660,6 +660,22 @@ export async function listarGruposEverest() {
   return [...new Set(produtos.map((p) => p.grupo_everest))].sort()
 }
 
+// Pedido do Felipe (02/10/2026): o seletor de Grupo Everest só deve oferecer grupo que TEVE
+// contagem de verdade dentro do filtro escolhido (período + lojas) — senão a lista fica poluída
+// de grupos cadastrados no Everest que nunca foram contados (ex.: "Ativos imobilizados e
+// decoração"). Reaproveita a mesma lógica de `buscarSaldoMensalPorProdutos` (mesmo filtro, mesma
+// regra de período) em vez de duplicar a conta.
+export async function listarGruposEverestComContagem(filtro = {}) {
+  const produtos = await buscarTodasAsLinhas(() =>
+    supabase.from('produtos').select('id, grupo_everest').not('grupo_everest', 'is', null)
+  )
+  if (!produtos.length) return []
+  const porProduto = await buscarSaldoMensalPorProdutos(produtos.map((p) => p.id), filtro)
+  const gruposComDado = new Set()
+  produtos.forEach((p) => { if (porProduto.has(p.id)) gruposComDado.add(p.grupo_everest) })
+  return [...gruposComDado].sort()
+}
+
 // Pedido do Felipe (02/10/2026, depois de ver a primeira versão): loja NÃO é coluna — é FILTRO
 // (escolhe 1, várias, ou todas; o que for escolhido entra somado na mesma coluna). A coluna agora
 // é o MÊS, dentro de um período (ex.: Jan até Set), pra comparar mês a mês. `mes_referencia`/
