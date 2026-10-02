@@ -660,42 +660,59 @@ export async function listarGruposEverest() {
   return [...new Set(produtos.map((p) => p.grupo_everest))].sort()
 }
 
-// Pedido do Felipe (01/10/2026): dentro do Inventário, a tabela por grupo Everest tinha uma
-// COLUNA POR DATA — mas quem conta é a LOJA, não a data, então duas lojas contando perto uma da
-// outra no mesmo mês pareciam "o mesmo dia repetido", sem rótulo nenhum dizendo de qual loja era
-// cada uma. Agora a coluna é a loja (faz sentido já que a tela já filtra por um mês só). Lojas
-// fragmentadas (mais de uma sessão da mesma loja no mesmo mês) somam na mesma coluna.
+// Pedido do Felipe (02/10/2026, depois de ver a primeira versão): loja NÃO é coluna — é FILTRO
+// (escolhe 1, várias, ou todas; o que for escolhido entra somado na mesma coluna). A coluna agora
+// é o MÊS, dentro de um período (ex.: Jan até Set), pra comparar mês a mês. `mes_referencia`/
+// `ano_referencia` são o que definem o mês (nunca a data exata) — consistente com o resto do app.
 //
-// Também só traz produto que teve PELO MENOS UMA contagem real nesse filtro — antes vinha a lista
+// `unidadeIds` (array de uuid, opcional — vazio/undefined = todas as lojas) e `periodoInicio`/
+// `periodoFim` ({mes, ano}, opcionais — sem eles, pega tudo) filtram; o rótulo de cada coluna é
+// "AAAA-MM".
+export async function buscarSaldoMensalPorProdutos(produtoIds, { unidadeIds, periodoInicio, periodoFim } = {}) {
+  if (!produtoIds?.length) return new Map()
+
+  let query = supabase
+    .from('itens_contagem')
+    .select('produto_id, quantidade, sessoes_contagem!inner(tipo, mes_referencia, ano_referencia, unidade_id)')
+    .in('produto_id', produtoIds)
+    .eq('sessoes_contagem.tipo', 'mensal')
+  if (unidadeIds?.length) query = query.in('sessoes_contagem.unidade_id', unidadeIds)
+  if (periodoInicio?.ano) query = query.gte('sessoes_contagem.ano_referencia', periodoInicio.ano)
+  if (periodoFim?.ano) query = query.lte('sessoes_contagem.ano_referencia', periodoFim.ano)
+  const { data, error } = await query
+  if (error) throw error
+
+  // O filtro acima só restringe por ANO (comparar mês+ano junto não dá num `.gte`/`.lte` simples
+  // de uma coluna só) — o recorte fino do período (ex.: não passar de setembro no ano final) é
+  // feito aqui, comparando ano*12+mes dos dois lados.
+  const chaveComparavel = (ano, mes) => ano * 12 + mes
+  const minimo = periodoInicio ? chaveComparavel(periodoInicio.ano, periodoInicio.mes) : -Infinity
+  const maximo = periodoFim ? chaveComparavel(periodoFim.ano, periodoFim.mes) : Infinity
+
+  const porProduto = new Map() // produto_id -> Map('AAAA-MM' -> quantidade somada)
+  data.filter((d) => d.sessoes_contagem).forEach((d) => {
+    const { mes_referencia: mes, ano_referencia: ano } = d.sessoes_contagem
+    if (!mes || !ano) return
+    if (chaveComparavel(ano, mes) < minimo || chaveComparavel(ano, mes) > maximo) return
+    const rotulo = `${ano}-${String(mes).padStart(2, '0')}`
+    if (!porProduto.has(d.produto_id)) porProduto.set(d.produto_id, new Map())
+    const porMes = porProduto.get(d.produto_id)
+    porMes.set(rotulo, (porMes.get(rotulo) || 0) + Number(d.quantidade || 0))
+  })
+  return porProduto
+}
+
+// Só traz produto que teve PELO MENOS UMA contagem real nesse filtro — antes vinha a lista
 // inteira do grupo Everest (podem ser centenas de itens cadastrados, a maioria nunca contada).
 export async function buscarSaldoPorGrupoEverest(grupoEverest, filtro = {}) {
   const produtosDoGrupo = await buscarTodasAsLinhas(() =>
     supabase.from('produtos').select('id, nome, codigo_everest').eq('grupo_everest', grupoEverest)
   )
   if (!produtosDoGrupo.length) return []
-  const idsProdutos = produtosDoGrupo.map((p) => p.id)
-
-  let query = supabase
-    .from('itens_contagem')
-    .select('produto_id, quantidade, sessoes_contagem!inner(tipo, mes_referencia, ano_referencia, unidades(nome))')
-    .in('produto_id', idsProdutos)
-  if (filtro.tipo) query = query.eq('sessoes_contagem.tipo', filtro.tipo)
-  if (filtro.mes) query = query.eq('sessoes_contagem.mes_referencia', filtro.mes)
-  if (filtro.ano) query = query.eq('sessoes_contagem.ano_referencia', filtro.ano)
-  const { data, error } = await query
-  if (error) throw error
-
-  const porProduto = new Map() // produto_id -> Map(nomeLoja -> quantidade somada)
-  data.filter((d) => d.sessoes_contagem).forEach((d) => {
-    const loja = d.sessoes_contagem.unidades?.nome || '—'
-    if (!porProduto.has(d.produto_id)) porProduto.set(d.produto_id, new Map())
-    const porLoja = porProduto.get(d.produto_id)
-    porLoja.set(loja, (porLoja.get(loja) || 0) + Number(d.quantidade || 0))
-  })
-
+  const porProduto = await buscarSaldoMensalPorProdutos(produtosDoGrupo.map((p) => p.id), filtro)
   return produtosDoGrupo
     .filter((p) => porProduto.has(p.id))
-    .map((p) => ({ produto: p, porLoja: porProduto.get(p.id) }))
+    .map((p) => ({ produto: p, porMes: porProduto.get(p.id) }))
 }
 
 // `filtro` ({ tipo, mes, ano }) opcional, repassado pra `buscarSaldoItem` — usado pela nova aba

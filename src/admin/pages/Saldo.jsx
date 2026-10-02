@@ -1,38 +1,65 @@
 import { useEffect, useRef, useState } from 'react'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { buscarProdutosAdmin, listarGruposEverest, buscarSaldoItem, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
-
-function formatarData(iso) {
-  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
-}
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { buscarProdutosAdmin, listarGruposEverest, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
 
 const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
+const NOMES_MES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
 
-// Pedido do Felipe (01/10/2026): esta tela é só do Inventário (mensal) agora — "Grupo de
-// contagem" (semanal/diário) mudou pra aba própria dentro de Contagem semanal, ver
-// `SaldoSemanal.jsx`. Também reduziu de 3 modos pra 2: Por item, e Grupo (Everest).
+function rotuloMes(ano, mes) {
+  return `${ano}-${String(mes).padStart(2, '0')}`
+}
+function labelMes(rotulo) {
+  const [ano, mes] = rotulo.split('-').map(Number)
+  return `${NOMES_MES_ABREV[mes - 1]}/${String(ano).slice(2)}`
+}
+// Lista todo mês entre início e fim (inclusive) — mesmo os sem contagem nenhuma aparecem (com
+// "—"), porque o ponto é comparar mês a mês e um buraco também é informação.
+function mesesDoPeriodo(inicio, fim) {
+  const lista = []
+  let ano = inicio.ano, mes = inicio.mes
+  while (ano < fim.ano || (ano === fim.ano && mes <= fim.mes)) {
+    lista.push(rotuloMes(ano, mes))
+    mes++
+    if (mes > 12) { mes = 1; ano++ }
+  }
+  return lista
+}
+
+// Pedido do Felipe (01/10/2026 → ajustado em 02/10/2026): esta tela é só do Inventário (mensal) —
+// "Grupo de contagem" (semanal/diário) mudou pra aba própria dentro de Contagem semanal, ver
+// `SaldoSemanal.jsx`. Loja é FILTRO (escolhe 1, várias ou todas as lojas, soma na mesma coluna) —
+// não mais uma coluna por loja. A coluna é o MÊS, dentro de um período (ex.: Jan até Set), pra dar
+// pra comparar mês a mês.
 export default function Saldo() {
   const [modo, setModo] = useState('item') // 'item' | 'grupoEverest'
 
   const [termo, setTermo] = useState('')
   const [resultadosBusca, setResultadosBusca] = useState([])
   const [produtoSelecionado, setProdutoSelecionado] = useState(null)
-  const [serieItem, setSerieItem] = useState([])
+  const [porMesItem, setPorMesItem] = useState(new Map())
   const debounceRef = useRef(null)
 
   const [gruposEverest, setGruposEverest] = useState([])
   const [grupoEverestSelecionado, setGrupoEverestSelecionado] = useState('')
   const [saldoGrupo, setSaldoGrupo] = useState([])
 
-  const [mesFiltro, setMesFiltro] = useState(new Date().getMonth() + 1)
-  const [anoFiltro, setAnoFiltro] = useState(new Date().getFullYear())
-  const [semFiltroMes, setSemFiltroMes] = useState(false)
+  const [unidades, setUnidades] = useState([])
+  const [unidadesSelecionadas, setUnidadesSelecionadas] = useState(new Set())
+
+  const hoje = new Date()
+  const [inicioMes, setInicioMes] = useState(hoje.getMonth() + 1)
+  const [inicioAno, setInicioAno] = useState(hoje.getFullYear())
+  const [fimMes, setFimMes] = useState(hoje.getMonth() + 1)
+  const [fimAno, setFimAno] = useState(hoje.getFullYear())
 
   const [carregando, setCarregando] = useState(false)
 
-  function filtroInventario() {
-    return { tipo: 'mensal', mes: semFiltroMes ? null : mesFiltro, ano: semFiltroMes ? null : anoFiltro }
-  }
+  useEffect(() => {
+    listarUnidadesAdmin().then((lista) => {
+      setUnidades(lista)
+      setUnidadesSelecionadas(new Set(lista.map((u) => u.id))) // começa com todas marcadas
+    })
+  }, [])
 
   useEffect(() => {
     if (modo === 'grupoEverest') listarGruposEverest().then(setGruposEverest)
@@ -47,47 +74,67 @@ export default function Saldo() {
     return () => clearTimeout(debounceRef.current)
   }, [termo])
 
+  function filtroAtual() {
+    // Nenhuma loja marcada = ninguém escolheu nada ainda (não confundir com "todas"); só manda o
+    // filtro de unidade quando nem todas estão marcadas, pra não mandar uma lista gigante à toa.
+    const todasMarcadas = unidades.length > 0 && unidadesSelecionadas.size === unidades.length
+    return {
+      unidadeIds: (unidadesSelecionadas.size > 0 && !todasMarcadas) ? [...unidadesSelecionadas] : undefined,
+      periodoInicio: { mes: inicioMes, ano: inicioAno },
+      periodoFim: { mes: fimMes, ano: fimAno }
+    }
+  }
+
+  async function carregarItem(produtoId) {
+    setCarregando(true)
+    try {
+      const mapa = await buscarSaldoMensalPorProdutos([produtoId], filtroAtual())
+      setPorMesItem(mapa.get(produtoId) || new Map())
+    } finally {
+      setCarregando(false)
+    }
+  }
+
   async function handleSelecionarProduto(produto) {
     setProdutoSelecionado(produto)
     setTermo('')
     setResultadosBusca([])
+    await carregarItem(produto.id)
+  }
+
+  async function carregarGrupo(nome) {
     setCarregando(true)
     try {
-      setSerieItem(await buscarSaldoItem(produto.id, filtroInventario()))
+      setSaldoGrupo(await buscarSaldoPorGrupoEverest(nome, filtroAtual()))
     } finally {
       setCarregando(false)
     }
   }
-
-  // Recarrega quando o mês/ano muda, com produto/grupo já selecionado.
-  useEffect(() => {
-    if (modo === 'item' && produtoSelecionado) {
-      setCarregando(true)
-      buscarSaldoItem(produtoSelecionado.id, filtroInventario()).then(setSerieItem).finally(() => setCarregando(false))
-    }
-    if (modo === 'grupoEverest' && grupoEverestSelecionado) {
-      setCarregando(true)
-      buscarSaldoPorGrupoEverest(grupoEverestSelecionado, filtroInventario()).then(setSaldoGrupo).finally(() => setCarregando(false))
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesFiltro, anoFiltro, semFiltroMes])
 
   async function handleSelecionarGrupoEverest(nome) {
     setGrupoEverestSelecionado(nome)
     if (!nome) return
-    setCarregando(true)
-    try {
-      setSaldoGrupo(await buscarSaldoPorGrupoEverest(nome, filtroInventario()))
-    } finally {
-      setCarregando(false)
-    }
+    await carregarGrupo(nome)
   }
 
-  const dadosGrafico = serieItem.map((s) => ({ data: formatarData(s.data), quantidade: s.quantidade }))
-  // Colunas são as LOJAS que de fato contaram esse grupo nesse mês — não datas (ver
-  // `buscarSaldoPorGrupoEverest`: antes a coluna era a data exata, e duas lojas contando perto
-  // uma da outra pareciam "o mesmo dia duplicado", sem nenhum rótulo dizendo de qual loja era).
-  const lojasDoGrupo = [...new Set(saldoGrupo.flatMap((r) => [...r.porLoja.keys()]))].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  // Recarrega quando período/lojas mudam, com produto/grupo já escolhido.
+  useEffect(() => {
+    if (modo === 'item' && produtoSelecionado) carregarItem(produtoSelecionado.id)
+    if (modo === 'grupoEverest' && grupoEverestSelecionado) carregarGrupo(grupoEverestSelecionado)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inicioMes, inicioAno, fimMes, fimAno, unidadesSelecionadas])
+
+  function toggleUnidade(id) {
+    setUnidadesSelecionadas((prev) => {
+      const novo = new Set(prev)
+      if (novo.has(id)) novo.delete(id)
+      else novo.add(id)
+      return novo
+    })
+  }
+
+  const meses = mesesDoPeriodo({ mes: inicioMes, ano: inicioAno }, { mes: fimMes, ano: fimAno })
+  const dadosGraficoItem = meses.map((m) => ({ mes: labelMes(m), quantidade: porMesItem.get(m) ?? 0 }))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -97,23 +144,41 @@ export default function Saldo() {
           <button className={modo === 'grupoEverest' ? 'active' : ''} onClick={() => setModo('grupoEverest')}>Grupo</button>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap', marginBottom: 14 }}>
-          <div style={{ flex: 2, minWidth: 140 }}>
-            <label className="muted">Mês</label>
-            <select value={mesFiltro} onChange={(e) => setMesFiltro(Number(e.target.value))} disabled={semFiltroMes}>
-              {NOMES_MES_SALDO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-            </select>
+        <div style={{ marginBottom: 14 }}>
+          <label className="muted" style={{ display: 'block', marginBottom: 6 }}>Loja (filtro — marque 1, várias ou todas)</label>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            {unidades.map((u) => (
+              <label key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                <input type="checkbox" checked={unidadesSelecionadas.has(u.id)} onChange={() => toggleUnidade(u.id)} style={{ width: 'auto' }} />
+                {u.nome}
+              </label>
+            ))}
           </div>
-          <div style={{ flex: 1, minWidth: 100 }}>
-            <label className="muted">Ano</label>
-            <select value={anoFiltro} onChange={(e) => setAnoFiltro(Number(e.target.value))} disabled={semFiltroMes}>
-              {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
+        </div>
+
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
+          <div>
+            <label className="muted" style={{ display: 'block', marginBottom: 4 }}>De</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select value={inicioMes} onChange={(e) => setInicioMes(Number(e.target.value))}>
+                {NOMES_MES_SALDO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              </select>
+              <select value={inicioAno} onChange={(e) => setInicioAno(Number(e.target.value))}>
+                {[hoje.getFullYear() - 1, hoje.getFullYear(), hoje.getFullYear() + 1].map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, paddingBottom: 10 }}>
-            <input type="checkbox" checked={semFiltroMes} onChange={(e) => setSemFiltroMes(e.target.checked)} style={{ width: 'auto' }} />
-            Todos os meses
-          </label>
+          <div>
+            <label className="muted" style={{ display: 'block', marginBottom: 4 }}>Até</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select value={fimMes} onChange={(e) => setFimMes(Number(e.target.value))}>
+                {NOMES_MES_SALDO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              </select>
+              <select value={fimAno} onChange={(e) => setFimAno(Number(e.target.value))}>
+                {[hoje.getFullYear() - 1, hoje.getFullYear(), hoje.getFullYear() + 1].map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+          </div>
         </div>
 
         {modo === 'item' && (
@@ -149,30 +214,24 @@ export default function Saldo() {
       {modo === 'item' && produtoSelecionado && !carregando && (
         <div className="card">
           <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>{produtoSelecionado.nome}</p>
-          <p className="muted" style={{ margin: '0 0 14px' }}>Everest {produtoSelecionado.codigo_everest || '—'} · {serieItem.length} contagem(ns) registrada(s)</p>
-          {serieItem.length === 0 ? (
-            <p className="muted">Esse item ainda não foi contado em nenhuma sessão (nem no histórico antigo) nesse filtro. Se você acha que deveria ter, confere o mês/ano escolhido, ou marque "Todos os meses".</p>
-          ) : (
-            <>
-              <div style={{ width: '100%', height: 220, marginBottom: 16 }}>
-                <ResponsiveContainer>
-                  <LineChart data={dadosGrafico}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="data" stroke="var(--text-secondary)" fontSize={12} />
-                    <YAxis stroke="var(--text-secondary)" fontSize={12} />
-                    <Tooltip contentStyle={{ background: 'var(--header-bg)', border: '0.5px solid rgba(244,241,233,0.15)', borderRadius: 8, color: 'var(--header-text)' }} />
-                    <Line type="monotone" dataKey="quantidade" stroke="var(--accent)" strokeWidth={2} dot={{ r: 4 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              {serieItem.map((s, i) => (
-                <div key={i} className="list-item">
-                  <span>{formatarData(s.data)} · {s.unidade} · {s.tipo}</span>
-                  <span>{s.quantidade}</span>
-                </div>
-              ))}
-            </>
-          )}
+          <p className="muted" style={{ margin: '0 0 14px' }}>Everest {produtoSelecionado.codigo_everest || '—'}</p>
+          <div style={{ width: '100%', height: 220, marginBottom: 16 }}>
+            <ResponsiveContainer>
+              <BarChart data={dadosGraficoItem}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="mes" stroke="var(--text-secondary)" fontSize={12} />
+                <YAxis stroke="var(--text-secondary)" fontSize={12} />
+                <Tooltip contentStyle={{ background: 'var(--header-bg)', border: '0.5px solid rgba(244,241,233,0.15)', borderRadius: 8, color: 'var(--header-text)' }} />
+                <Bar dataKey="quantidade" fill="var(--accent)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          {meses.map((m) => (
+            <div key={m} className="list-item">
+              <span>{labelMes(m)}</span>
+              <span>{porMesItem.get(m) ?? '—'}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -182,25 +241,25 @@ export default function Saldo() {
             Saldo por item — {grupoEverestSelecionado}
           </p>
           {saldoGrupo.length === 0 ? (
-            <p className="muted">Nenhum item desse grupo foi contado nesse filtro ainda. Confere o mês/ano, ou marque "Todos os meses".</p>
+            <p className="muted">Nenhum item desse grupo foi contado nesse filtro ainda. Confere o período ou as lojas marcadas.</p>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
                   <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Produto</th>
-                  {lojasDoGrupo.map((loja) => (
-                    <th key={loja} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                      {loja}
+                  {meses.map((m) => (
+                    <th key={m} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                      {labelMes(m)}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {saldoGrupo.map(({ produto, porLoja }) => (
+                {saldoGrupo.map(({ produto, porMes }) => (
                   <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
                     <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
-                    {lojasDoGrupo.map((loja) => (
-                      <td key={loja} style={{ textAlign: 'right', padding: '8px' }}>{porLoja.get(loja) ?? '—'}</td>
+                    {meses.map((m) => (
+                      <td key={m} style={{ textAlign: 'right', padding: '8px' }}>{porMes.get(m) ?? '—'}</td>
                     ))}
                   </tr>
                 ))}
