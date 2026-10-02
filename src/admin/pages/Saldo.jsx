@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { buscarProdutosAdmin, listarGruposEverestComContagem, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest, buscarConsumoMensalPorProduto } from '../lib/adminApi'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { buscarProdutosAdmin, listarGruposEverestComContagem, listarUnidadesAdmin, buscarSaldoMensalPorProdutos, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
 
 const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 const NOMES_MES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
@@ -44,19 +44,11 @@ export default function Saldo() {
   const [resultadosBusca, setResultadosBusca] = useState([])
   const [produtoSelecionado, setProdutoSelecionado] = useState(null)
   const [porMesItem, setPorMesItem] = useState(new Map())
-  const [consumoItem, setConsumoItem] = useState(new Map())
   const debounceRef = useRef(null)
 
   const [gruposEverest, setGruposEverest] = useState([])
   const [grupoEverestSelecionado, setGrupoEverestSelecionado] = useState('')
   const [saldoGrupo, setSaldoGrupo] = useState([])
-
-  // Consumo real (saldo anterior + compras − saldo atual) sob demanda, ao passar o mouse num
-  // item da tabela de grupo — pedido do Felipe. Cache por produto pra não refazer a conta toda
-  // vez que o mouse volta a passar por cima do mesmo item.
-  const [consumoCache, setConsumoCache] = useState(new Map())
-  const [produtoHover, setProdutoHover] = useState(null)
-  const [posHover, setPosHover] = useState({ top: 0, left: 0 })
 
   const [unidades, setUnidades] = useState([])
   const [unidadesSelecionadas, setUnidadesSelecionadas] = useState(new Set())
@@ -117,11 +109,6 @@ export default function Saldo() {
     try {
       const mapa = await buscarSaldoMensalPorProdutos([produto.id], filtroAtual())
       setPorMesItem(mapa.get(produto.id) || new Map())
-      try {
-        setConsumoItem(await buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual()))
-      } catch {
-        setConsumoItem(new Map()) // saldo continua mostrando mesmo se o cálculo de consumo falhar
-      }
     } finally {
       setCarregando(false)
     }
@@ -181,27 +168,8 @@ export default function Saldo() {
   }
   function pararArrasto() { arrastoRef.current = null }
 
-  // Clica no item da tabela de grupo pra ver o consumo real (era só hover, mas isso não funciona
-  // em tablet/touch — clique funciona em qualquer aparelho). Clicar de novo no mesmo item fecha.
-  const [erroConsumo, setErroConsumo] = useState('')
-  function aoClicarNoItem(produto, e) {
-    if (arrastoRef.current?.arrastando) return // não abre no meio de um arraste
-    if (produtoHover?.id === produto.id) { setProdutoHover(null); return }
-    const rect = e.currentTarget.getBoundingClientRect()
-    setPosHover({ top: rect.bottom + 6, left: rect.left })
-    setProdutoHover(produto)
-    setErroConsumo('')
-    if (!consumoCache.has(produto.id)) {
-      buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual())
-        .then((mapa) => setConsumoCache((prev) => new Map(prev).set(produto.id, mapa)))
-        .catch((e2) => setErroConsumo(e2.message))
-    }
-  }
-
   const meses = mesesDoPeriodo({ mes: inicioMes, ano: inicioAno }, { mes: fimMes, ano: fimAno })
   const dadosGraficoItem = meses.map((m) => ({ mes: labelMes(m), quantidade: porMesItem.get(m) ?? 0 }))
-  const dadosConsumoItem = meses.map((m) => ({ mes: labelMes(m), consumo: consumoItem.get(m) ?? null }))
-  const dadosConsumoHover = produtoHover ? meses.map((m) => ({ mes: labelMes(m), consumo: consumoCache.get(produtoHover.id)?.get(m) ?? null })) : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -299,21 +267,6 @@ export default function Saldo() {
               <span>{fmt(porMesItem.get(m))}</span>
             </div>
           ))}
-
-          <p className="muted" style={{ margin: '18px 0 6px', fontWeight: 500, fontSize: 13 }}>
-            Consumo real (saldo anterior + compras − saldo atual)
-          </p>
-          <div style={{ width: '100%', height: 180 }}>
-            <ResponsiveContainer>
-              <LineChart data={dadosConsumoItem}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="mes" stroke="var(--text-secondary)" fontSize={12} />
-                <YAxis stroke="var(--text-secondary)" fontSize={12} />
-                <Tooltip contentStyle={{ background: 'var(--header-bg)', border: '0.5px solid rgba(244,241,233,0.15)', borderRadius: 8, color: 'var(--header-text)' }} />
-                <Line type="monotone" dataKey="consumo" stroke="var(--warning)" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
         </div>
       )}
 
@@ -331,14 +284,17 @@ export default function Saldo() {
               onMouseMove={moverArrasto}
               onMouseUp={pararArrasto}
               onMouseLeave={pararArrasto}
-              style={{ overflowX: 'auto', cursor: 'grab' }}
+              // Limita a altura e deixa rolar na vertical também — com o cabeçalho (meses) fixo
+              // no topo, pedido do Felipe, pra não perder a referência do mês ao olhar os
+              // últimos itens de uma lista grande.
+              style={{ overflow: 'auto', maxHeight: '70vh', cursor: 'grab' }}
             >
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, userSelect: 'none' }}>
                 <thead>
                   <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                    <th style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, zIndex: 1 }}>Produto</th>
+                    <th style={{ position: 'sticky', top: 0, left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, zIndex: 3 }}>Produto</th>
                     {meses.map((m) => (
-                      <th key={m} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                      <th key={m} style={{ position: 'sticky', top: 0, background: 'var(--surface)', textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap', zIndex: 2 }}>
                         {labelMes(m)}
                       </th>
                     ))}
@@ -347,13 +303,7 @@ export default function Saldo() {
                 <tbody>
                   {saldoGrupo.map(({ produto, porMes }) => (
                     <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                      <td
-                        onClick={(e) => aoClicarNoItem(produto, e)}
-                        style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline dotted' }}
-                        title="Clique pra ver o consumo real"
-                      >
-                        {produto.nome}
-                      </td>
+                      <td style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
                       {meses.map((m) => (
                         <td key={m} style={{ textAlign: 'right', padding: '8px' }}>{fmt(porMes.get(m))}</td>
                       ))}
@@ -361,37 +311,6 @@ export default function Saldo() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {produtoHover && (
-        <div
-          style={{
-            position: 'fixed', top: posHover.top, left: posHover.left, zIndex: 50,
-            background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10,
-            padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.18)', width: 260
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <p style={{ margin: '0 0 2px', fontWeight: 600, fontSize: 13 }}>{produtoHover.nome}</p>
-            <button onClick={() => setProdutoHover(null)} style={{ padding: '2px 6px', fontSize: 12, lineHeight: 1 }}>×</button>
-          </div>
-          <p className="muted" style={{ margin: '0 0 8px', fontSize: 11 }}>Consumo real por mês</p>
-          {erroConsumo ? (
-            <p style={{ color: 'var(--danger)', fontSize: 12 }}>Não consegui calcular: {erroConsumo}</p>
-          ) : !consumoCache.has(produtoHover.id) ? (
-            <p className="muted" style={{ fontSize: 12 }}>Calculando…</p>
-          ) : (
-            <div style={{ width: '100%', height: 110 }}>
-              <ResponsiveContainer>
-                <LineChart data={dadosConsumoHover}>
-                  <XAxis dataKey="mes" stroke="var(--text-secondary)" fontSize={10} />
-                  <YAxis stroke="var(--text-secondary)" fontSize={10} width={30} />
-                  <Line type="monotone" dataKey="consumo" stroke="var(--warning)" strokeWidth={2} dot={{ r: 2 }} connectNulls={false} />
-                </LineChart>
-              </ResponsiveContainer>
             </div>
           )}
         </div>
