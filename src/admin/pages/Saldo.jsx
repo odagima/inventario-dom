@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { buscarProdutosAdmin, listarGruposAdmin, listarGruposEverest, buscarSaldoItem, buscarSaldoGrupo, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
+import { buscarProdutosAdmin, listarGruposEverest, buscarSaldoItem, buscarSaldoPorGrupoEverest } from '../lib/adminApi'
 
 function formatarData(iso) {
   return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })
@@ -8,8 +8,11 @@ function formatarData(iso) {
 
 const NOMES_MES_SALDO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 
+// Pedido do Felipe (01/10/2026): esta tela é só do Inventário (mensal) agora — "Grupo de
+// contagem" (semanal/diário) mudou pra aba própria dentro de Contagem semanal, ver
+// `SaldoSemanal.jsx`. Também reduziu de 3 modos pra 2: Por item, e Grupo (Everest).
 export default function Saldo() {
-  const [modo, setModo] = useState('item') // 'item' | 'grupo' | 'grupoEverest'
+  const [modo, setModo] = useState('item') // 'item' | 'grupoEverest'
 
   const [termo, setTermo] = useState('')
   const [resultadosBusca, setResultadosBusca] = useState([])
@@ -17,16 +20,10 @@ export default function Saldo() {
   const [serieItem, setSerieItem] = useState([])
   const debounceRef = useRef(null)
 
-  const [grupos, setGrupos] = useState([])
-  const [grupoId, setGrupoId] = useState('')
-  const [saldoGrupo, setSaldoGrupo] = useState([])
-
   const [gruposEverest, setGruposEverest] = useState([])
   const [grupoEverestSelecionado, setGrupoEverestSelecionado] = useState('')
+  const [saldoGrupo, setSaldoGrupo] = useState([])
 
-  // Só vale pra "Por item" e "Grupo Everest" — são os dois modos de dentro do Inventário
-  // (tipo: 'mensal'). "Grupo de contagem" é semanal/diário/perdas/produção, mês de referência não
-  // se aplica do mesmo jeito.
   const [mesFiltro, setMesFiltro] = useState(new Date().getMonth() + 1)
   const [anoFiltro, setAnoFiltro] = useState(new Date().getFullYear())
   const [semFiltroMes, setSemFiltroMes] = useState(false)
@@ -38,7 +35,6 @@ export default function Saldo() {
   }
 
   useEffect(() => {
-    if (modo === 'grupo') listarGruposAdmin().then(setGrupos)
     if (modo === 'grupoEverest') listarGruposEverest().then(setGruposEverest)
   }, [modo])
 
@@ -63,7 +59,7 @@ export default function Saldo() {
     }
   }
 
-  // Recarrega quando o mês/ano muda, com produto já selecionado.
+  // Recarrega quando o mês/ano muda, com produto/grupo já selecionado.
   useEffect(() => {
     if (modo === 'item' && produtoSelecionado) {
       setCarregando(true)
@@ -75,17 +71,6 @@ export default function Saldo() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesFiltro, anoFiltro, semFiltroMes])
-
-  async function handleSelecionarGrupo(id) {
-    setGrupoId(id)
-    if (!id) return
-    setCarregando(true)
-    try {
-      setSaldoGrupo(await buscarSaldoGrupo(id))
-    } finally {
-      setCarregando(false)
-    }
-  }
 
   async function handleSelecionarGrupoEverest(nome) {
     setGrupoEverestSelecionado(nome)
@@ -99,37 +84,37 @@ export default function Saldo() {
   }
 
   const dadosGrafico = serieItem.map((s) => ({ data: formatarData(s.data), quantidade: s.quantidade }))
-  const datasDoGrupo = [...new Set(saldoGrupo.flatMap((r) => r.serie.map((s) => s.data)))].sort((a, b) => new Date(a) - new Date(b))
+  // Colunas são as LOJAS que de fato contaram esse grupo nesse mês — não datas (ver
+  // `buscarSaldoPorGrupoEverest`: antes a coluna era a data exata, e duas lojas contando perto
+  // uma da outra pareciam "o mesmo dia duplicado", sem nenhum rótulo dizendo de qual loja era).
+  const lojasDoGrupo = [...new Set(saldoGrupo.flatMap((r) => [...r.porLoja.keys()]))].sort((a, b) => a.localeCompare(b, 'pt-BR'))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div className="card">
         <div className="segmented" style={{ marginBottom: 16 }}>
           <button className={modo === 'item' ? 'active' : ''} onClick={() => setModo('item')}>Por item</button>
-          <button className={modo === 'grupo' ? 'active' : ''} onClick={() => setModo('grupo')}>Grupo de contagem</button>
-          <button className={modo === 'grupoEverest' ? 'active' : ''} onClick={() => setModo('grupoEverest')}>Grupo Everest</button>
+          <button className={modo === 'grupoEverest' ? 'active' : ''} onClick={() => setModo('grupoEverest')}>Grupo</button>
         </div>
 
-        {(modo === 'item' || modo === 'grupoEverest') && (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap', marginBottom: 14 }}>
-            <div style={{ flex: 2, minWidth: 140 }}>
-              <label className="muted">Mês</label>
-              <select value={mesFiltro} onChange={(e) => setMesFiltro(Number(e.target.value))} disabled={semFiltroMes}>
-                {NOMES_MES_SALDO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-              </select>
-            </div>
-            <div style={{ flex: 1, minWidth: 100 }}>
-              <label className="muted">Ano</label>
-              <select value={anoFiltro} onChange={(e) => setAnoFiltro(Number(e.target.value))} disabled={semFiltroMes}>
-                {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, paddingBottom: 10 }}>
-              <input type="checkbox" checked={semFiltroMes} onChange={(e) => setSemFiltroMes(e.target.checked)} style={{ width: 'auto' }} />
-              Todos os meses
-            </label>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap', marginBottom: 14 }}>
+          <div style={{ flex: 2, minWidth: 140 }}>
+            <label className="muted">Mês</label>
+            <select value={mesFiltro} onChange={(e) => setMesFiltro(Number(e.target.value))} disabled={semFiltroMes}>
+              {NOMES_MES_SALDO.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
           </div>
-        )}
+          <div style={{ flex: 1, minWidth: 100 }}>
+            <label className="muted">Ano</label>
+            <select value={anoFiltro} onChange={(e) => setAnoFiltro(Number(e.target.value))} disabled={semFiltroMes}>
+              {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, paddingBottom: 10 }}>
+            <input type="checkbox" checked={semFiltroMes} onChange={(e) => setSemFiltroMes(e.target.checked)} style={{ width: 'auto' }} />
+            Todos os meses
+          </label>
+        </div>
 
         {modo === 'item' && (
           <div style={{ position: 'relative' }}>
@@ -146,16 +131,6 @@ export default function Saldo() {
               </div>
             )}
           </div>
-        )}
-
-        {modo === 'grupo' && (
-          <>
-            <label className="muted">Grupo de contagem (semanal/diário que você criou)</label>
-            <select value={grupoId} onChange={(e) => handleSelecionarGrupo(e.target.value)} style={{ marginTop: 4 }}>
-              <option value="">Selecione…</option>
-              {grupos.map((g) => <option key={g.id} value={g.id}>{g.nome}</option>)}
-            </select>
-          </>
         )}
 
         {modo === 'grupoEverest' && (
@@ -176,7 +151,7 @@ export default function Saldo() {
           <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>{produtoSelecionado.nome}</p>
           <p className="muted" style={{ margin: '0 0 14px' }}>Everest {produtoSelecionado.codigo_everest || '—'} · {serieItem.length} contagem(ns) registrada(s)</p>
           {serieItem.length === 0 ? (
-            <p className="muted">Esse item ainda não foi contado em nenhuma sessão (nem no histórico antigo). Se você acha que deveria ter, confere na aba "Histórico antigo" se o código Everest bateu certinho na importação.</p>
+            <p className="muted">Esse item ainda não foi contado em nenhuma sessão (nem no histórico antigo) nesse filtro. Se você acha que deveria ter, confere o mês/ano escolhido, ou marque "Todos os meses".</p>
           ) : (
             <>
               <div style={{ width: '100%', height: 220, marginBottom: 16 }}>
@@ -201,37 +176,34 @@ export default function Saldo() {
         </div>
       )}
 
-      {(modo === 'grupo' || modo === 'grupoEverest') && saldoGrupo.length > 0 && !carregando && (
+      {modo === 'grupoEverest' && grupoEverestSelecionado && !carregando && (
         <div className="card" style={{ overflowX: 'auto' }}>
           <p style={{ margin: '0 0 14px', fontWeight: 600, fontSize: 15 }}>
-            Saldo por item — {modo === 'grupo' ? grupos.find((g) => g.id === grupoId)?.nome : grupoEverestSelecionado}
+            Saldo por item — {grupoEverestSelecionado}
           </p>
-          {datasDoGrupo.length === 0 ? (
-            <p className="muted">Nenhum item desse grupo tem contagem registrada ainda.</p>
+          {saldoGrupo.length === 0 ? (
+            <p className="muted">Nenhum item desse grupo foi contado nesse filtro ainda. Confere o mês/ano, ou marque "Todos os meses".</p>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
                   <th style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Produto</th>
-                  {datasDoGrupo.map((d) => (
-                    <th key={d} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                      {formatarData(d)}
+                  {lojasDoGrupo.map((loja) => (
+                    <th key={loja} style={{ textAlign: 'right', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                      {loja}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {saldoGrupo.filter((r) => r.serie.length > 0).map(({ produto, serie }) => {
-                  const porData = new Map(serie.map((s) => [s.data, s.quantidade]))
-                  return (
-                    <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                      <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
-                      {datasDoGrupo.map((d) => (
-                        <td key={d} style={{ textAlign: 'right', padding: '8px' }}>{porData.get(d) ?? '—'}</td>
-                      ))}
-                    </tr>
-                  )
-                })}
+                {saldoGrupo.map(({ produto, porLoja }) => (
+                  <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{produto.nome}</td>
+                    {lojasDoGrupo.map((loja) => (
+                      <td key={loja} style={{ textAlign: 'right', padding: '8px' }}>{porLoja.get(loja) ?? '—'}</td>
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}

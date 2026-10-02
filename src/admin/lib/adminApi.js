@@ -607,7 +607,7 @@ export async function reprocessarSiglasExistentes(onProgresso) {
 export async function buscarSaldoItem(produtoId, { tipo, mes, ano } = {}) {
   let query = supabase
     .from('itens_contagem')
-    .select('quantidade, sessoes_contagem!inner(id, iniciada_em, tipo, mes_referencia, ano_referencia, unidades(nome))')
+    .select('quantidade, sessoes_contagem!inner(id, iniciada_em, data_referencia, tipo, mes_referencia, ano_referencia, unidades(nome))')
     .eq('produto_id', produtoId)
   if (tipo) query = query.eq('sessoes_contagem.tipo', tipo)
   if (mes) query = query.eq('sessoes_contagem.mes_referencia', mes)
@@ -623,7 +623,11 @@ export async function buscarSaldoItem(produtoId, { tipo, mes, ano } = {}) {
     .filter((d) => d.sessoes_contagem)
     .map((d) => ({
       sessaoId: d.sessoes_contagem.id,
-      data: d.sessoes_contagem.iniciada_em,
+      // Mesma correção já feita no Histórico/Exportar (Relatorio.jsx): a DATA REAL que a
+      // contagem representa é `data_referencia` quando existe (pode ter sido lançada depois,
+      // retroativa) — `iniciada_em` é só quando alguém digitou, e usar ela aqui já causou
+      // confusão antes (mês errado aparecendo na tela).
+      data: d.sessoes_contagem.data_referencia || d.sessoes_contagem.iniciada_em,
       tipo: d.sessoes_contagem.tipo,
       unidade: d.sessoes_contagem.unidades?.nome,
       quantidade: Number(d.quantidade)
@@ -656,19 +660,49 @@ export async function listarGruposEverest() {
   return [...new Set(produtos.map((p) => p.grupo_everest))].sort()
 }
 
-// `mes`/`ano` opcionais — "Saldo por item" dentro do Inventário sempre manda `tipo: 'mensal'`
-// pra não misturar com contagem semanal/perdas/produção (ver `buscarSaldoItem`).
+// Pedido do Felipe (01/10/2026): dentro do Inventário, a tabela por grupo Everest tinha uma
+// COLUNA POR DATA — mas quem conta é a LOJA, não a data, então duas lojas contando perto uma da
+// outra no mesmo mês pareciam "o mesmo dia repetido", sem rótulo nenhum dizendo de qual loja era
+// cada uma. Agora a coluna é a loja (faz sentido já que a tela já filtra por um mês só). Lojas
+// fragmentadas (mais de uma sessão da mesma loja no mesmo mês) somam na mesma coluna.
+//
+// Também só traz produto que teve PELO MENOS UMA contagem real nesse filtro — antes vinha a lista
+// inteira do grupo Everest (podem ser centenas de itens cadastrados, a maioria nunca contada).
 export async function buscarSaldoPorGrupoEverest(grupoEverest, filtro = {}) {
-  const produtos = await buscarTodasAsLinhas(() =>
+  const produtosDoGrupo = await buscarTodasAsLinhas(() =>
     supabase.from('produtos').select('id, nome, codigo_everest').eq('grupo_everest', grupoEverest)
   )
-  const resultados = await Promise.all(produtos.map(async (p) => ({ produto: p, serie: await buscarSaldoItem(p.id, filtro) })))
-  return resultados
+  if (!produtosDoGrupo.length) return []
+  const idsProdutos = produtosDoGrupo.map((p) => p.id)
+
+  let query = supabase
+    .from('itens_contagem')
+    .select('produto_id, quantidade, sessoes_contagem!inner(tipo, mes_referencia, ano_referencia, unidades(nome))')
+    .in('produto_id', idsProdutos)
+  if (filtro.tipo) query = query.eq('sessoes_contagem.tipo', filtro.tipo)
+  if (filtro.mes) query = query.eq('sessoes_contagem.mes_referencia', filtro.mes)
+  if (filtro.ano) query = query.eq('sessoes_contagem.ano_referencia', filtro.ano)
+  const { data, error } = await query
+  if (error) throw error
+
+  const porProduto = new Map() // produto_id -> Map(nomeLoja -> quantidade somada)
+  data.filter((d) => d.sessoes_contagem).forEach((d) => {
+    const loja = d.sessoes_contagem.unidades?.nome || '—'
+    if (!porProduto.has(d.produto_id)) porProduto.set(d.produto_id, new Map())
+    const porLoja = porProduto.get(d.produto_id)
+    porLoja.set(loja, (porLoja.get(loja) || 0) + Number(d.quantidade || 0))
+  })
+
+  return produtosDoGrupo
+    .filter((p) => porProduto.has(p.id))
+    .map((p) => ({ produto: p, porLoja: porProduto.get(p.id) }))
 }
 
-// Sem filtro de tipo de propósito: "Grupo de contagem" é o agrupamento de semanal/diário/perdas/
-// produção (ver SelecaoUnidade.jsx) — não é do Inventário, então continua mostrando todo tipo.
-export async function buscarSaldoGrupo(grupoId) {
+// `filtro` ({ tipo, mes, ano }) opcional, repassado pra `buscarSaldoItem` — usado pela nova aba
+// de Saldo dentro de Contagem Semanal (01/10/2026, pedido do Felipe), que manda tipo:'semanal' +
+// mês/ano pra não misturar com Inventário. Sem filtro, continua mostrando todo tipo (comportamento
+// antigo, caso algum outro lugar ainda chame sem filtro).
+export async function buscarSaldoGrupo(grupoId, filtro = {}) {
   const { data: itensGrupo, error } = await supabase
     .from('grupos_contagem_itens')
     .select('produtos(id, nome, unidade_medida)')
@@ -677,7 +711,7 @@ export async function buscarSaldoGrupo(grupoId) {
 
   const produtos = itensGrupo.map((r) => r.produtos)
   const resultados = await Promise.all(
-    produtos.map(async (p) => ({ produto: p, serie: await buscarSaldoItem(p.id) }))
+    produtos.map(async (p) => ({ produto: p, serie: await buscarSaldoItem(p.id, filtro) }))
   )
   return resultados
 }

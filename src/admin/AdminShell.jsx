@@ -9,6 +9,7 @@ import Reset from './pages/Reset'
 import ConfiguracaoMensal from './pages/ConfiguracaoMensal'
 import Siglas from './pages/Siglas'
 import Saldo from './pages/Saldo'
+import SaldoSemanal from './pages/SaldoSemanal'
 import BaseProdutos from './pages/BaseProdutos'
 import UsuariosPerfis from './pages/UsuariosPerfis'
 import ImportarDados from './pages/ImportarDados'
@@ -89,6 +90,7 @@ const MODULOS = [
     titulo: 'Contagem semanal',
     abas: [
       { id: 'sem_analise', label: 'Análise / Dashboard', perm: 'contagens.ver' },
+      { id: 'sem_saldo', label: 'Saldo por item', perm: 'contagens.ver' },
       { id: 'sem_grupos', label: 'Grupos de contagem', perm: 'cadastros.editar' },
       { id: 'sem_cmv', label: 'CMV Real × Teórico', perm: 'custos.ver' },
       { id: 'sem_historico', label: 'Histórico / Exportar', perm: 'contagens.ver' }
@@ -273,6 +275,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
 
           {/* ── CONTAGEM SEMANAL ── */}
           {aba === 'sem_analise' && <Dashboard tipoFiltro="semanal" />}
+          {aba === 'sem_saldo' && <SaldoSemanal />}
           {aba === 'sem_grupos' && <Grupos />}
           {aba === 'sem_cmv' && <CMVSemanal />}
           {aba === 'sem_historico' && <Relatorio tipoFiltro="semanal" mostrarExportEverest />}
