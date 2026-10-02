@@ -117,7 +117,11 @@ export default function Saldo() {
     try {
       const mapa = await buscarSaldoMensalPorProdutos([produto.id], filtroAtual())
       setPorMesItem(mapa.get(produto.id) || new Map())
-      setConsumoItem(await buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual()))
+      try {
+        setConsumoItem(await buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual()))
+      } catch {
+        setConsumoItem(new Map()) // saldo continua mostrando mesmo se o cálculo de consumo falhar
+      }
     } finally {
       setCarregando(false)
     }
@@ -177,20 +181,22 @@ export default function Saldo() {
   }
   function pararArrasto() { arrastoRef.current = null }
 
-  // Ao passar o mouse num item da tabela de grupo, mostra um gráfico de consumo real (pedido do
-  // Felipe) — busca só na primeira vez que passa por aquele produto, depois fica em cache.
-  function aoPassarMouseNoItem(produto, e) {
-    if (arrastoRef.current?.arrastando) return // não abre tooltip no meio de um arraste
+  // Clica no item da tabela de grupo pra ver o consumo real (era só hover, mas isso não funciona
+  // em tablet/touch — clique funciona em qualquer aparelho). Clicar de novo no mesmo item fecha.
+  const [erroConsumo, setErroConsumo] = useState('')
+  function aoClicarNoItem(produto, e) {
+    if (arrastoRef.current?.arrastando) return // não abre no meio de um arraste
+    if (produtoHover?.id === produto.id) { setProdutoHover(null); return }
     const rect = e.currentTarget.getBoundingClientRect()
     setPosHover({ top: rect.bottom + 6, left: rect.left })
     setProdutoHover(produto)
+    setErroConsumo('')
     if (!consumoCache.has(produto.id)) {
-      buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual()).then((mapa) => {
-        setConsumoCache((prev) => new Map(prev).set(produto.id, mapa))
-      })
+      buscarConsumoMensalPorProduto(produto.id, produto.codigo_everest, filtroAtual())
+        .then((mapa) => setConsumoCache((prev) => new Map(prev).set(produto.id, mapa)))
+        .catch((e2) => setErroConsumo(e2.message))
     }
   }
-  function aoSairDoItem() { setProdutoHover(null) }
 
   const meses = mesesDoPeriodo({ mes: inicioMes, ano: inicioAno }, { mes: fimMes, ano: fimAno })
   const dadosGraficoItem = meses.map((m) => ({ mes: labelMes(m), quantidade: porMesItem.get(m) ?? 0 }))
@@ -342,9 +348,9 @@ export default function Saldo() {
                   {saldoGrupo.map(({ produto, porMes }) => (
                     <tr key={produto.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
                       <td
-                        onMouseEnter={(e) => aoPassarMouseNoItem(produto, e)}
-                        onMouseLeave={aoSairDoItem}
-                        style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap', cursor: 'help' }}
+                        onClick={(e) => aoClicarNoItem(produto, e)}
+                        style={{ position: 'sticky', left: 0, background: 'var(--surface)', borderRight: '1px solid var(--border)', padding: '8px', whiteSpace: 'nowrap', cursor: 'pointer', textDecoration: 'underline dotted' }}
+                        title="Clique pra ver o consumo real"
                       >
                         {produto.nome}
                       </td>
@@ -365,12 +371,17 @@ export default function Saldo() {
           style={{
             position: 'fixed', top: posHover.top, left: posHover.left, zIndex: 50,
             background: 'var(--surface)', border: '0.5px solid var(--border)', borderRadius: 10,
-            padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.18)', pointerEvents: 'none', width: 260
+            padding: '10px 12px', boxShadow: '0 4px 16px rgba(0,0,0,0.18)', width: 260
           }}
         >
-          <p style={{ margin: '0 0 2px', fontWeight: 600, fontSize: 13 }}>{produtoHover.nome}</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+            <p style={{ margin: '0 0 2px', fontWeight: 600, fontSize: 13 }}>{produtoHover.nome}</p>
+            <button onClick={() => setProdutoHover(null)} style={{ padding: '2px 6px', fontSize: 12, lineHeight: 1 }}>×</button>
+          </div>
           <p className="muted" style={{ margin: '0 0 8px', fontSize: 11 }}>Consumo real por mês</p>
-          {!consumoCache.has(produtoHover.id) ? (
+          {erroConsumo ? (
+            <p style={{ color: 'var(--danger)', fontSize: 12 }}>Não consegui calcular: {erroConsumo}</p>
+          ) : !consumoCache.has(produtoHover.id) ? (
             <p className="muted" style={{ fontSize: 12 }}>Calculando…</p>
           ) : (
             <div style={{ width: '100%', height: 110 }}>
