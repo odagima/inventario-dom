@@ -22,7 +22,8 @@ const LABEL_TIPO = {
   transferencia_entrada: 'Transferência recebida',
   requisicao_saida: 'Requisição atendida',
   requisicao_entrada: 'Requisição recebida',
-  ajuste_contagem: 'Ajuste de contagem'
+  ajuste_contagem: 'Ajuste de contagem',
+  recebimento: 'Recebimento de mercadoria'
 }
 
 function fmt(n, casas = 3) {

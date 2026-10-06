@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#1c2b44" />
+    <!-- 06/10/2026, pedido do Felipe ("app consegue ficar em tela cheia, nativo, não do
+         navegador?"): manifest + meta tags fazem o navegador oferecer "Adicionar à tela inicial" —
+         quando aberto a partir desse atalho, o app abre SEM a barra de endereço, do jeito que ele
+         pediu. Abrir pelo link/aba normal continua mostrando a barra do navegador — isso é do
+         navegador, não tem como tirar de outro jeito; só funciona a partir do atalho instalado. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Grupo DOM" />
     <title>Inventário · Grupo DOM</title>
     <!-- 09/09/2026: DM Sans removida (era carregada do Google Fonts aqui). A fonte agora é a de
          sistema (ver src/styles.css) — San Francisco no Mac/iPhone, Segoe UI no Windows, Roboto
