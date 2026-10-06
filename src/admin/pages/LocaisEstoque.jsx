@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../../components/BuscaProdutoPerda'
 import { listarLocaisEstoque } from '../../lib/locaisEstoqueApi'
-import { listarSaldosCalculados, buscarHistoricoMovimentos } from '../../lib/estoqueMovimentosApi'
+import { listarSaldosCalculados, buscarHistoricoMovimentos, removerMovimento } from '../../lib/estoqueMovimentosApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../../lib/requisicaoTransferenciaApi'
 import { buscarProdutosPorCodigosEverest } from '../../lib/api'
 import { formatarNumero } from '../lib/formato'
@@ -42,7 +42,7 @@ function primeiroDiaMesAtual() {
 }
 function hojeIso() { return new Date().toISOString().slice(0, 10) }
 
-export default function LocaisEstoque() {
+export default function LocaisEstoque({ usuario }) {
   const [locais, setLocais] = useState([])
   const [saldosPorLocal, setSaldosPorLocal] = useState({})
   const [pendentesReq, setPendentesReq] = useState([])
@@ -120,7 +120,7 @@ export default function LocaisEstoque() {
         )}
       </div>
 
-      <HistoricoMovimentacao locais={locais} />
+      <HistoricoMovimentacao locais={locais} usuario={usuario} />
 
       <div className="card">
         <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Requisições pendentes</p>
@@ -153,7 +153,7 @@ export default function LocaisEstoque() {
   )
 }
 
-function HistoricoMovimentacao({ locais }) {
+function HistoricoMovimentacao({ locais, usuario }) {
   const [produto, setProduto] = useState(null)
   const [localEstoqueId, setLocalEstoqueId] = useState('')
   const [dataInicio, setDataInicio] = useState(primeiroDiaMesAtual())
@@ -161,6 +161,8 @@ function HistoricoMovimentacao({ locais }) {
   const [buscando, setBuscando] = useState(false)
   const [erro, setErro] = useState('')
   const [linhas, setLinhas] = useState(null) // null = ainda não buscou
+  const [excluindoId, setExcluindoId] = useState(null)
+  const podeExcluir = !!usuario?.ehDesenvolvedor
 
   const nomePorLocal = Object.fromEntries(locais.map((l) => [l.id, l.nome]))
 
@@ -180,6 +182,22 @@ function HistoricoMovimentacao({ locais }) {
       setErro('Não consegui buscar — ' + e.message)
     } finally {
       setBuscando(false)
+    }
+  }
+
+  // Só DEV — pedido do Felipe (06/10/2026): "estou fazendo vários testes, e depois preciso
+  // apagar". Apaga de verdade (ver `removerMovimento`), muda o saldo calculado na hora.
+  async function excluir(m) {
+    if (!window.confirm('Excluir esse movimento? Isso muda o saldo calculado do local de estoque. Não dá pra desfazer.')) return
+    setExcluindoId(m.id)
+    setErro('')
+    try {
+      await removerMovimento(m.id)
+      await buscar()
+    } catch (e) {
+      setErro('Não consegui excluir — ' + e.message)
+    } finally {
+      setExcluindoId(null)
     }
   }
 
@@ -229,7 +247,7 @@ function HistoricoMovimentacao({ locais }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 14 }}>
             <thead>
               <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                {['Data', 'Tipo', 'Local de estoque', 'Quantidade', 'Saldo', 'Usuário'].map((h) => (
+                {['Data', 'Tipo', 'Local de estoque', 'Quantidade', 'Saldo', 'Usuário', ...(podeExcluir ? [''] : [])].map((h) => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
@@ -245,6 +263,18 @@ function HistoricoMovimentacao({ locais }) {
                   </td>
                   <td style={{ padding: '8px', textAlign: 'right' }}>{formatarNumero(m.saldoAcumulado, 3)}</td>
                   <td style={{ padding: '8px' }} className="muted">{m.usuario || '—'}</td>
+                  {podeExcluir && (
+                    <td style={{ padding: '8px' }}>
+                      <button
+                        onClick={() => excluir(m)}
+                        disabled={excluindoId === m.id}
+                        style={{ padding: '6px 9px', color: 'var(--danger)' }}
+                        aria-label="Excluir movimento"
+                      >
+                        {excluindoId === m.id ? '…' : '×'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

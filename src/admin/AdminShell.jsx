@@ -286,7 +286,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
 
           {/* ── PRODUÇÃO ── */}
           {aba === 'prod_analise' && <AnaliseProducao />}
-          {aba === 'prod_locais' && <LocaisEstoque />}
+          {aba === 'prod_locais' && <LocaisEstoque usuario={usuario} />}
           {aba === 'prod_historico' && <Relatorio tipoFiltro="producao" mostrarExportEverest={false} />}
           {aba === 'prod_exportar' && <Relatorio tipoFiltro="producao" mostrarExportEverest />}
 

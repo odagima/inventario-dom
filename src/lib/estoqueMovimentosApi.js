@@ -50,6 +50,16 @@ export async function listarSaldosCalculados(localEstoqueId) {
   return data || []
 }
 
+// Apagar de verdade (não cancelar/marcar) — exceção à regra de "não sumir com nada" do resto do
+// app, porque esta tabela é um ledger só de soma: uma linha de teste errada (ex.: 10 milhões de kg
+// digitado num teste) PRECISA sumir da soma, não só ser marcada. Pedido do Felipe (06/10/2026):
+// "estou fazendo vários testes, e depois preciso apagar" — só pra DEV (ver `usuario.ehDesenvolvedor`
+// na tela, `src/admin/pages/LocaisEstoque.jsx`), não existe em nenhuma tela operacional.
+export async function removerMovimento(movimentoId) {
+  const { error } = await supabase.from('estoque_movimentos').delete().eq('id', movimentoId)
+  if (error) throw error
+}
+
 // Histórico de movimentação de UM item — pedido do Felipe (06/10/2026): "ter um histórico da
 // movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
 // (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra
