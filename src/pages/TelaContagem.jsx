@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
+import Topbar from '../components/Topbar'
+import Modal from '../components/Modal'
 import ScannerCodigoBarras from '../components/ScannerCodigoBarras'
 import ConversaoQuantidade from '../components/ConversaoQuantidade'
 import VincularProduto from '../components/VincularProduto'
@@ -270,130 +272,95 @@ export default function TelaContagem({ sessao, unidade, grupo, onFinalizar, onSa
 
   return (
     <div className="screen">
-      <div className="topbar">
-        <div style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <span className="unidade" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nomeContexto}</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-              {onSair && (
-                <button
-                  className="ghost"
-                  onClick={onSair}
-                  style={{ fontSize: 13, fontWeight: 600, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}
-                >
-                  Voltar
-                </button>
+      <Topbar
+        titulo={nomeContexto}
+        onVoltar={onSair}
+        acoes={[
+          { icone: 'trash', aria: 'Excluir', cor: 'var(--danger)', onClick: () => setConfirmandoExclusao(true) },
+          { icone: 'send', aria: 'Enviar', onClick: () => setConfirmandoEnvio(true) }
+        ]}
+        subtitulo={(
+          <>
+            <p style={{ margin: '0 0 6px' }}>
+              {NOMES_TIPO[sessao.tipo] || sessao.tipo}
+              {sessao.tipo === 'mensal' && sessao.mes_referencia && (
+                <> · ref. {String(sessao.mes_referencia).padStart(2, '0')}/{sessao.ano_referencia}</>
               )}
-              <button
-                className="ghost"
-                onClick={() => setConfirmandoExclusao(true)}
-                style={{ fontSize: 13, fontWeight: 600, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10, color: 'var(--danger)' }}
-              >
-                Excluir
-              </button>
-              <button
-                className="ghost"
-                onClick={() => setConfirmandoEnvio(true)}
-                style={{ fontSize: 13, fontWeight: 600, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}
-              >
-                Enviar
-              </button>
-            </div>
-          </div>
-          <p className="muted" style={{ margin: '2px 0 8px' }}>
-            {NOMES_TIPO[sessao.tipo] || sessao.tipo}
-            {sessao.tipo === 'mensal' && sessao.mes_referencia && (
-              <> · ref. {String(sessao.mes_referencia).padStart(2, '0')}/{sessao.ano_referencia}</>
+            </p>
+            {progresso && progresso.esperados > 0 && (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 13, color: 'var(--header-text-secondary)' }}>
+                    <strong style={{ color: 'var(--header-text)' }}>{progresso.contados}</strong> de {progresso.esperados} itens
+                  </span>
+                  <span style={{ fontSize: 13, color: 'var(--header-text-secondary)' }}>
+                    {Math.round((progresso.contados / progresso.esperados) * 100)}%
+                  </span>
+                </div>
+                {/* Track claro translúcido — essa barra fica dentro do cabeçalho marinho da Contagem. */}
+                <div style={{ background: 'rgba(244,241,233,0.22)', borderRadius: 6, height: 6, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      background: 'linear-gradient(90deg, var(--accent), var(--accent-2))', height: '100%',
+                      width: `${Math.min(100, Math.round((progresso.contados / progresso.esperados) * 100))}%`,
+                      transition: 'width 0.3s ease'
+                    }}
+                  />
+                </div>
+              </div>
             )}
-          </p>
-          {progresso && progresso.esperados > 0 && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontSize: 13, color: 'var(--header-text-secondary)' }}>
-                  <strong style={{ color: 'var(--header-text)' }}>{progresso.contados}</strong> de {progresso.esperados} itens
-                </span>
-                <span style={{ fontSize: 13, color: 'var(--header-text-secondary)' }}>
-                  {Math.round((progresso.contados / progresso.esperados) * 100)}%
-                </span>
-              </div>
-              {/* Track claro translúcido — essa barra fica dentro do cabeçalho marinho da Contagem. */}
-              <div style={{ background: 'rgba(244,241,233,0.22)', borderRadius: 6, height: 6, overflow: 'hidden' }}>
-                <div
-                  style={{
-                    background: 'linear-gradient(90deg, var(--accent), var(--accent-2))', height: '100%',
-                    width: `${Math.min(100, Math.round((progresso.contados / progresso.esperados) * 100))}%`,
-                    transition: 'width 0.3s ease'
-                  }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       {confirmandoEnvio && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 }}
-          onClick={() => !enviando && setConfirmandoEnvio(false)}
-        >
-          <div className="card" style={{ maxWidth: 340, width: '100%' }} onClick={(e) => e.stopPropagation()}>
-            <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>
-              {sessao.tipo === 'perdas' ? 'Confirmar envio do registro?' : 'Confirmar envio?'}
-            </p>
-            <p className="muted" style={{ margin: '0 0 20px' }}>
-              {nomeContexto} · {itens.length} {itens.length === 1 ? 'item' : 'itens'}
-              {sessao.tipo === 'perdas' ? ' registrado(s) como perda/desperdício.' : ' lançado(s).'} Depois de enviada, {sessao.tipo === 'perdas' ? 'o registro é encerrado' : 'a contagem é encerrada'}.
-            </p>
-            {erroEnvio && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroEnvio}</p>}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setConfirmandoEnvio(false)} disabled={enviando} style={{ flex: 1 }}>Cancelar</button>
-              <button className="primary" onClick={handleFinalizarSessao} disabled={enviando} style={{ flex: 1 }}>
-                {enviando ? 'Enviando…' : 'Confirmar envio'}
-              </button>
-            </div>
+        <Modal onFechar={() => !enviando && setConfirmandoEnvio(false)} largura={340}>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>
+            {sessao.tipo === 'perdas' ? 'Confirmar envio do registro?' : 'Confirmar envio?'}
+          </p>
+          <p className="muted" style={{ margin: '0 0 20px' }}>
+            {nomeContexto} · {itens.length} {itens.length === 1 ? 'item' : 'itens'}
+            {sessao.tipo === 'perdas' ? ' registrado(s) como perda/desperdício.' : ' lançado(s).'} Depois de enviada, {sessao.tipo === 'perdas' ? 'o registro é encerrado' : 'a contagem é encerrada'}.
+          </p>
+          {erroEnvio && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroEnvio}</p>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirmandoEnvio(false)} disabled={enviando} style={{ flex: 1 }}>Cancelar</button>
+            <button className="primary" onClick={handleFinalizarSessao} disabled={enviando} style={{ flex: 1 }}>
+              {enviando ? 'Enviando…' : 'Confirmar envio'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {confirmandoExclusao && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 }}
-          onClick={() => !excluindo && setConfirmandoExclusao(false)}
-        >
-          <div className="card" style={{ maxWidth: 340, width: '100%' }} onClick={(e) => e.stopPropagation()}>
-            <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Excluir essa contagem?</p>
-            <p className="muted" style={{ margin: '0 0 20px' }}>
-              {nomeContexto} · {itens.length} {itens.length === 1 ? 'item' : 'itens'} lançado(s). Isso apaga a sessão e tudo que já foi
-              lançado nela — não dá pra desfazer.
-            </p>
-            {erroExclusao && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroExclusao}</p>}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setConfirmandoExclusao(false)} disabled={excluindo} style={{ flex: 1 }}>Cancelar</button>
-              <button onClick={handleExcluirSessao} disabled={excluindo} style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}>
-                {excluindo ? 'Excluindo…' : 'Confirmar exclusão'}
-              </button>
-            </div>
+        <Modal onFechar={() => !excluindo && setConfirmandoExclusao(false)} largura={340}>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Excluir essa contagem?</p>
+          <p className="muted" style={{ margin: '0 0 20px' }}>
+            {nomeContexto} · {itens.length} {itens.length === 1 ? 'item' : 'itens'} lançado(s). Isso apaga a sessão e tudo que já foi
+            lançado nela — não dá pra desfazer.
+          </p>
+          {erroExclusao && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroExclusao}</p>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirmandoExclusao(false)} disabled={excluindo} style={{ flex: 1 }}>Cancelar</button>
+            <button onClick={handleExcluirSessao} disabled={excluindo} style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}>
+              {excluindo ? 'Excluindo…' : 'Confirmar exclusão'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {escolhaDuplicado && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 }}
-          onClick={() => setEscolhaDuplicado(null)}
-        >
-          <div className="card" style={{ maxWidth: 340, width: '100%' }} onClick={(e) => e.stopPropagation()}>
-            <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Esse item já foi lançado</p>
-            <p className="muted" style={{ margin: '0 0 20px' }}>
-              {escolhaDuplicado.produto.nome} já tem {escolhaDuplicado.existente.quantidade} {escolhaDuplicado.produto.unidade_medida} lançado(s) nessa sessão. O que você quer fazer?
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button className="primary" onClick={handleEscolherEditarExistente}>Editar o lançamento existente</button>
-              <button onClick={handleEscolherLancarNovo}>Lançar como novo registro (linha separada)</button>
-              <button className="ghost" onClick={() => setEscolhaDuplicado(null)}>Cancelar</button>
-            </div>
+        <Modal onFechar={() => setEscolhaDuplicado(null)} largura={340}>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Esse item já foi lançado</p>
+          <p className="muted" style={{ margin: '0 0 20px' }}>
+            {escolhaDuplicado.produto.nome} já tem {escolhaDuplicado.existente.quantidade} {escolhaDuplicado.produto.unidade_medida} lançado(s) nessa sessão. O que você quer fazer?
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button className="primary" onClick={handleEscolherEditarExistente}>Editar o lançamento existente</button>
+            <button onClick={handleEscolherLancarNovo}>Lançar como novo registro (linha separada)</button>
+            <button className="ghost" onClick={() => setEscolhaDuplicado(null)}>Cancelar</button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}

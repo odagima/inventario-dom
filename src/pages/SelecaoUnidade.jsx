@@ -10,6 +10,7 @@ import {
   finalizarSessao
 } from '../lib/api'
 import BuscaProduto from '../components/BuscaProduto'
+import Topbar from '../components/Topbar'
 
 // Contagem semanal não pede loja (Compras não separa por loja no Everest, e a Contagem Semanal
 // já é filtrada por Grupo de contagem). 28/08/2026: perdas também não — é lançamento de cozinha,
@@ -281,10 +282,7 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
 
   return (
     <div className="screen">
-      <div className="app-header">
-        <p className="brand">Grupo DOM</p>
-        <p className="subtitle">Olá, {usuarioLogado.nome}!</p>
-      </div>
+      <Topbar titulo={tipoFixo ? TIPO_PERDAS.label : 'Contagem'} subtitulo={`Olá, ${usuarioLogado.nome}`} onVoltar={onVoltar} />
 
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!tipoFixo && (
@@ -400,10 +398,6 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
             )}
           </>
         )}
-      </div>
-
-      <div style={{ textAlign: 'center', marginTop: 20 }}>
-        <button className="ghost" onClick={onVoltar}>‹ Voltar</button>
       </div>
     </div>
   )

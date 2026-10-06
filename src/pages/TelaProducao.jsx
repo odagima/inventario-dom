@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
+import Topbar from '../components/Topbar'
+import Modal from '../components/Modal'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarFatoresCorrecao, calcularFCTeorico, filhosDiretos, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
@@ -104,19 +106,11 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
   return (
     <div className="screen">
-      <div className="topbar">
-        <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <div style={{ minWidth: 0 }}>
-            <span className="unidade">Produção</span>
-            <p className="muted" style={{ margin: '2px 0 0' }}>
-              {tela === 'painel' ? 'o que está sendo produzido' : tela === 'abrir' ? 'nova produção' : tela === 'planejar' ? 'planejar o que falta produzir' : 'acompanhar a produção'}
-            </p>
-          </div>
-          {tela === 'painel'
-            ? <button className="ghost" onClick={onSair} style={{ flexShrink: 0 }}>Voltar</button>
-            : <button className="ghost" onClick={() => { setTela('painel'); setProcessoRaizId(null); setPrefill(null); carregar() }} style={{ flexShrink: 0 }}>Voltar</button>}
-        </div>
-      </div>
+      <Topbar
+        titulo="Produção"
+        subtitulo={tela === 'painel' ? 'o que está sendo produzido' : tela === 'abrir' ? 'nova produção' : tela === 'planejar' ? 'planejar o que falta produzir' : 'acompanhar a produção'}
+        onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); setPrefill(null); carregar() }}
+      />
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
 
@@ -748,31 +742,28 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
             Finalizar essa etapa
           </button>
 
-          {!confirmandoCancelar ? (
-            <button className="ghost" onClick={() => setConfirmandoCancelar(true)} style={{ color: 'var(--danger)' }}>
-              Cancelar essa etapa
-            </button>
-          ) : (
-            <div className="card">
-              <p style={{ margin: '0 0 10px', fontSize: 13 }}>Cancelar essa etapa? Ela sai do painel e não entra nos indicadores, mas fica registrada.</p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => setConfirmandoCancelar(false)} style={{ flex: 1 }}>Voltar</button>
-                <button
-                  onClick={async () => { await cancelarProducao(producao.id, usuario); await onMudou() }}
-                  style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}
-                >Confirmar</button>
-              </div>
-            </div>
-          )}
+          <button className="ghost" onClick={() => setConfirmandoCancelar(true)} style={{ color: 'var(--danger)' }}>
+            Cancelar essa etapa
+          </button>
         </>
       )}
 
+      {confirmandoCancelar && (
+        <Modal onFechar={() => setConfirmandoCancelar(false)}>
+          <p style={{ margin: '0 0 10px', fontSize: 13 }}>Cancelar essa etapa? Ela sai do painel e não entra nos indicadores, mas fica registrada.</p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirmandoCancelar(false)} style={{ flex: 1 }}>Voltar</button>
+            <button
+              onClick={async () => { await cancelarProducao(producao.id, usuario); setConfirmandoCancelar(false); await onMudou() }}
+              style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}
+            >Confirmar</button>
+          </div>
+        </Modal>
+      )}
+
       {confirmandoFinalizar && (
-        <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 }}
-          onClick={() => !salvando && setConfirmandoFinalizar(false)}
-        >
-          <div className="card" style={{ maxWidth: 360, width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }} onClick={(e) => e.stopPropagation()}>
+        <Modal onFechar={() => !salvando && setConfirmandoFinalizar(false)} largura={360}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <p style={{ margin: 0, fontWeight: 600 }}>Confere antes de fechar — isso grava no saldo do local de estoque</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {saidas.map((s) => (
@@ -789,7 +780,7 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   )

@@ -199,6 +199,89 @@ select option {
   color: var(--header-text-secondary);
 }
 
+/* Cabeçalho padrão novo (06/10/2026, pedido do Felipe: "voltar vira botão, estilo iOS" +
+   "padronizar voltar, excluir, editar"). Substitui `.topbar` tela por tela (ver Topbar.jsx) — as
+   regras antigas de `.topbar`/`.app-header` acima ficam intocadas pras telas que ainda não
+   passaram pro componente novo. */
+.topbar-novo {
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  color: var(--text);
+}
+.screen .topbar-novo {
+  background: var(--header-bg);
+  color: var(--header-text);
+  border-radius: 24px;
+  padding: 16px 14px;
+  margin: 0 0 16px;
+}
+.topbar-novo-linha {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+.topbar-novo-lado { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.topbar-novo-titulo {
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-voltar {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 4px 2px 4px 0;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.topbar-icone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.screen .topbar-icone {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--header-text);
+}
+.topbar-novo-subtitulo { color: var(--text-secondary); font-size: 13px; margin-top: 2px; }
+.screen .topbar-novo-subtitulo { color: var(--header-text-secondary); }
+
+/* Popup padrão (06/10/2026) — fundo com blur, fecha com ESC/clique fora (ver Modal.jsx). */
+.modal-fundo {
+  position: fixed;
+  inset: 0;
+  background: rgba(28, 43, 68, 0.28);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 20px;
+}
+.modal-caixa {
+  background: var(--surface);
+  border-radius: 20px;
+  padding: 18px;
+  width: 100%;
+  box-shadow: 0 8px 28px rgba(28, 43, 68, 0.22);
+}
+
 .card {
   background: var(--surface);
   border: 0.5px solid var(--border);

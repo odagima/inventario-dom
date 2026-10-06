@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
+import Topbar from '../components/Topbar'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
@@ -55,15 +56,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
 
   return (
     <div className="screen">
-      <div className="topbar">
-        <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <div style={{ minWidth: 0 }}>
-            <span className="unidade">Requisição / Transferência</span>
-            <p className="muted" style={{ margin: '2px 0 0' }}>pedir e mandar material entre locais de estoque</p>
-          </div>
-          <button className="ghost" onClick={onSair} style={{ flexShrink: 0 }}>Voltar</button>
-        </div>
-      </div>
+      <Topbar titulo="Requisição / Transferência" subtitulo="pedir e mandar material entre locais de estoque" onVoltar={onSair} />
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
 

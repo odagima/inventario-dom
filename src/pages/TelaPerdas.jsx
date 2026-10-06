@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
+import Topbar from '../components/Topbar'
+import Modal from '../components/Modal'
 import { MOTIVOS_PERDA, CATEGORIAS_PERDA, LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../lib/perdas'
 import {
   registrarItemContagem,
@@ -212,27 +214,15 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
 
   return (
     <div className="screen">
-      <div className="topbar">
-        <div style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <span className="unidade" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {unidade?.nome || 'Perdas'}
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-              {onSair && (
-                <button className="ghost" onClick={onSair} style={{ fontSize: 13, fontWeight: 600, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}>
-                  Voltar
-                </button>
-              )}
-              <button className="ghost" onClick={() => setConfirmandoExclusao(true)} style={{ fontSize: 13, fontWeight: 600, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10, color: 'var(--danger)' }}>
-                Excluir
-              </button>
-              <button className="ghost" onClick={() => setConfirmandoEnvio(true)} style={{ fontSize: 13, fontWeight: 600, padding: '10px 12px', background: 'var(--surface-2)', borderRadius: 10 }}>
-                Enviar
-              </button>
-            </div>
-          </div>
-          <p className="muted" style={{ margin: '2px 0 0' }}>
+      <Topbar
+        titulo={unidade?.nome || 'Perdas'}
+        onVoltar={onSair}
+        acoes={[
+          { icone: 'trash', aria: 'Excluir', cor: 'var(--danger)', onClick: () => setConfirmandoExclusao(true) },
+          { icone: 'send', aria: 'Enviar', onClick: () => setConfirmandoEnvio(true) }
+        ]}
+        subtitulo={(
+          <p style={{ margin: 0 }}>
             registro de perdas · {contexto}
             {' '}
             <button
@@ -248,8 +238,8 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
               alterar
             </button>
           </p>
-        </div>
-      </div>
+        )}
+      />
 
       {/* Aviso permanente, não é um toast que some. §55: se o time achar que a perda já sai do
           estoque, vai contar errado depois — a contagem física continua sendo a contagem física. */}
@@ -298,39 +288,35 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
       )}
 
       {confirmandoEnvio && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 }} onClick={() => !enviando && setConfirmandoEnvio(false)}>
-          <div className="card" style={{ maxWidth: 340, width: '100%' }} onClick={(e) => e.stopPropagation()}>
-            <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Confirmar envio do registro?</p>
-            <p className="muted" style={{ margin: '0 0 20px' }}>
-              {contexto} · {itens.length} {itens.length === 1 ? 'lançamento' : 'lançamentos'}. Depois de enviado, o registro é encerrado.
-            </p>
-            {erroEnvio && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroEnvio}</p>}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setConfirmandoEnvio(false)} disabled={enviando} style={{ flex: 1 }}>Cancelar</button>
-              <button className="primary" onClick={handleFinalizarSessao} disabled={enviando} style={{ flex: 1 }}>
-                {enviando ? 'Enviando…' : 'Confirmar envio'}
-              </button>
-            </div>
+        <Modal onFechar={() => !enviando && setConfirmandoEnvio(false)} largura={340}>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Confirmar envio do registro?</p>
+          <p className="muted" style={{ margin: '0 0 20px' }}>
+            {contexto} · {itens.length} {itens.length === 1 ? 'lançamento' : 'lançamentos'}. Depois de enviado, o registro é encerrado.
+          </p>
+          {erroEnvio && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroEnvio}</p>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirmandoEnvio(false)} disabled={enviando} style={{ flex: 1 }}>Cancelar</button>
+            <button className="primary" onClick={handleFinalizarSessao} disabled={enviando} style={{ flex: 1 }}>
+              {enviando ? 'Enviando…' : 'Confirmar envio'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {confirmandoExclusao && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 20 }} onClick={() => !excluindo && setConfirmandoExclusao(false)}>
-          <div className="card" style={{ maxWidth: 340, width: '100%' }} onClick={(e) => e.stopPropagation()}>
-            <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Excluir esse registro?</p>
-            <p className="muted" style={{ margin: '0 0 20px' }}>
-              {contexto} · {itens.length} {itens.length === 1 ? 'lançamento' : 'lançamentos'}. Isso apaga tudo que foi lançado nesse turno — não dá pra desfazer.
-            </p>
-            {erroExclusao && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroExclusao}</p>}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setConfirmandoExclusao(false)} disabled={excluindo} style={{ flex: 1 }}>Cancelar</button>
-              <button onClick={handleExcluirSessao} disabled={excluindo} style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}>
-                {excluindo ? 'Excluindo…' : 'Confirmar exclusão'}
-              </button>
-            </div>
+        <Modal onFechar={() => !excluindo && setConfirmandoExclusao(false)} largura={340}>
+          <p style={{ margin: '0 0 6px', fontWeight: 600, fontSize: 16 }}>Excluir esse registro?</p>
+          <p className="muted" style={{ margin: '0 0 20px' }}>
+            {contexto} · {itens.length} {itens.length === 1 ? 'lançamento' : 'lançamentos'}. Isso apaga tudo que foi lançado nesse turno — não dá pra desfazer.
+          </p>
+          {erroExclusao && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erroExclusao}</p>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setConfirmandoExclusao(false)} disabled={excluindo} style={{ flex: 1 }}>Cancelar</button>
+            <button onClick={handleExcluirSessao} disabled={excluindo} style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}>
+              {excluindo ? 'Excluindo…' : 'Confirmar exclusão'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
