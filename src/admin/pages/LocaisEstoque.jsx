@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../../components/BuscaProdutoPerda'
-import { listarFrentes } from '../../lib/frentesApi'
+import { listarLocaisEstoque } from '../../lib/locaisEstoqueApi'
 import { listarSaldosCalculados, buscarHistoricoMovimentos } from '../../lib/estoqueMovimentosApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../../lib/requisicaoTransferenciaApi'
 import { buscarProdutosPorCodigosEverest } from '../../lib/api'
 import { formatarNumero } from '../lib/formato'
 
-// Painel de conferência das Frentes (migration_v15.sql) — não existia nenhum lugar no Admin pra
-// ver o que é lançado em Produção/Requisição/Transferência: cada tela nova (TelaProducao,
-// TelaRequisicao) só mostra o que está em aberto, nada fica visível depois de fechado. Esta tela
-// só LÊ — nenhuma edição acontece aqui.
+// Painel de conferência dos Locais de estoque (migration_v15.sql, renomeado de "frente" na
+// migration_v19.sql) — não existia nenhum lugar no Admin pra ver o que é lançado em Produção/
+// Requisição/Transferência: cada tela nova (TelaProducao, TelaRequisicao) só mostra o que está em
+// aberto, nada fica visível depois de fechado. Esta tela só LÊ — nenhuma edição acontece aqui.
 //
 // 06/10/2026 (pedido do Felipe): o histórico de movimentação é filtrado por ITEM — item + período
-// + frente, só então mostra — em vez de uma lista corrida (produções/requisições/transferências
+// + local, só então mostra — em vez de uma lista corrida (produções/requisições/transferências
 // dos últimos 50, sempre visível), que cresce sem parar e fica difícil de ler.
 
 const LABEL_TIPO = {
@@ -42,9 +42,9 @@ function primeiroDiaMesAtual() {
 }
 function hojeIso() { return new Date().toISOString().slice(0, 10) }
 
-export default function FrentesProducao() {
-  const [frentes, setFrentes] = useState([])
-  const [saldosPorFrente, setSaldosPorFrente] = useState({})
+export default function LocaisEstoque() {
+  const [locais, setLocais] = useState([])
+  const [saldosPorLocal, setSaldosPorLocal] = useState({})
   const [pendentesReq, setPendentesReq] = useState([])
   const [pendentesTransf, setPendentesTransf] = useState([])
   const [carregando, setCarregando] = useState(true)
@@ -53,23 +53,23 @@ export default function FrentesProducao() {
   useEffect(() => {
     async function carregar() {
       try {
-        const fr = await listarFrentes()
-        setFrentes(fr)
+        const ls = await listarLocaisEstoque()
+        setLocais(ls)
 
         const saldosBrutos = await Promise.all(
-          fr.map((f) => listarSaldosCalculados(f.id).then((linhas) => [f.id, linhas]))
+          ls.map((l) => listarSaldosCalculados(l.id).then((linhas) => [l.id, linhas]))
         )
         const todosCodigos = [...new Set(saldosBrutos.flatMap(([, linhas]) => linhas.map((l) => l.codigo_everest)))]
         const produtos = await buscarProdutosPorCodigosEverest(todosCodigos)
         const nomePorCodigo = Object.fromEntries(produtos.map((p) => [p.codigo_everest, p.nome]))
 
         const mapa = {}
-        saldosBrutos.forEach(([frenteId, linhas]) => {
-          mapa[frenteId] = linhas
+        saldosBrutos.forEach(([localId, linhas]) => {
+          mapa[localId] = linhas
             .filter((l) => Math.abs(Number(l.saldo)) > 0.0001) // zerado não ajuda a conferir nada — só polui
             .map((l) => ({ ...l, nome: nomePorCodigo[l.codigo_everest] || l.codigo_everest }))
         })
-        setSaldosPorFrente(mapa)
+        setSaldosPorLocal(mapa)
 
         const [pr, pt] = await Promise.all([listarRequisicoesPendentes(), listarTransferenciasPendentes()])
         setPendentesReq(pr)
@@ -90,23 +90,23 @@ export default function FrentesProducao() {
       {erro && <div className="card"><p style={{ color: 'var(--danger)' }}>{erro}</p></div>}
 
       <div className="card">
-        <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo calculado por frente</p>
+        <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo calculado por local de estoque</p>
         <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>
           Ledger próprio (migration_v15.sql), separado do saldo por contagem — só itens com saldo diferente de zero aparecem aqui.
         </p>
-        {frentes.map((f) => {
-          const linhas = saldosPorFrente[f.id] || []
+        {locais.map((l) => {
+          const linhas = saldosPorLocal[l.id] || []
           if (!linhas.length) return null
           return (
-            <div key={f.id} style={{ marginBottom: 14 }}>
-              <p style={{ margin: '0 0 6px', fontWeight: 500, fontSize: 13.5 }}>{f.nome}</p>
+            <div key={l.id} style={{ marginBottom: 14 }}>
+              <p style={{ margin: '0 0 6px', fontWeight: 500, fontSize: 13.5 }}>{l.nome}</p>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <tbody>
-                  {linhas.map((l) => (
-                    <tr key={l.codigo_everest} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                      <td style={{ padding: '4px 8px 4px 0' }}>{l.nome}</td>
+                  {linhas.map((item) => (
+                    <tr key={item.codigo_everest} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                      <td style={{ padding: '4px 8px 4px 0' }}>{item.nome}</td>
                       <td style={{ padding: '4px 0', textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                        {formatarNumero(l.saldo, 3)}
+                        {formatarNumero(item.saldo, 3)}
                       </td>
                     </tr>
                   ))}
@@ -115,12 +115,12 @@ export default function FrentesProducao() {
             </div>
           )
         })}
-        {frentes.every((f) => !(saldosPorFrente[f.id] || []).length) && (
-          <p className="muted">Nenhuma frente com saldo lançado ainda.</p>
+        {locais.every((l) => !(saldosPorLocal[l.id] || []).length) && (
+          <p className="muted">Nenhum local de estoque com saldo lançado ainda.</p>
         )}
       </div>
 
-      <HistoricoMovimentacao frentes={frentes} />
+      <HistoricoMovimentacao locais={locais} />
 
       <div className="card">
         <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Requisições pendentes</p>
@@ -153,23 +153,23 @@ export default function FrentesProducao() {
   )
 }
 
-function HistoricoMovimentacao({ frentes }) {
+function HistoricoMovimentacao({ locais }) {
   const [produto, setProduto] = useState(null)
-  const [frenteId, setFrenteId] = useState('')
+  const [localEstoqueId, setLocalEstoqueId] = useState('')
   const [dataInicio, setDataInicio] = useState(primeiroDiaMesAtual())
   const [dataFim, setDataFim] = useState(hojeIso())
   const [buscando, setBuscando] = useState(false)
   const [erro, setErro] = useState('')
   const [linhas, setLinhas] = useState(null) // null = ainda não buscou
 
-  const nomePorFrente = Object.fromEntries(frentes.map((f) => [f.id, f.nome]))
+  const nomePorLocal = Object.fromEntries(locais.map((l) => [l.id, l.nome]))
 
   async function buscar() {
     if (!produto) return
     setBuscando(true)
     setErro('')
     try {
-      const movimentos = await buscarHistoricoMovimentos({ codigoEverest: produto.codigo_everest, frenteId: frenteId || undefined, dataFim })
+      const movimentos = await buscarHistoricoMovimentos({ codigoEverest: produto.codigo_everest, localEstoqueId: localEstoqueId || undefined, dataFim })
       // Saldo acumulado soma a HISTÓRIA TODA (até dataFim) — senão o acumulado mentiria, voltando
       // a zero sempre que alguém filtra a partir de uma data no meio da vida do item.
       let saldo = 0
@@ -200,10 +200,10 @@ function HistoricoMovimentacao({ frentes }) {
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ flex: 1, minWidth: 140 }}>
-            <label className="muted">Frente</label>
-            <select value={frenteId} onChange={(e) => setFrenteId(e.target.value)}>
-              <option value="">Todas</option>
-              {frentes.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            <label className="muted">Local de estoque</label>
+            <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
+              <option value="">Todos</option>
+              {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
             </select>
           </div>
           <div style={{ flex: 1, minWidth: 130 }}>
@@ -229,7 +229,7 @@ function HistoricoMovimentacao({ frentes }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 14 }}>
             <thead>
               <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                {['Data', 'Tipo', 'Frente', 'Quantidade', 'Saldo', 'Usuário'].map((h) => (
+                {['Data', 'Tipo', 'Local de estoque', 'Quantidade', 'Saldo', 'Usuário'].map((h) => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
@@ -239,7 +239,7 @@ function HistoricoMovimentacao({ frentes }) {
                 <tr key={m.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
                   <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{formatarDataHora(m.registrado_em)}</td>
                   <td style={{ padding: '8px' }}>{LABEL_TIPO[m.tipo] || m.tipo}</td>
-                  <td style={{ padding: '8px' }}>{nomePorFrente[m.frente_id] || '—'}</td>
+                  <td style={{ padding: '8px' }}>{nomePorLocal[m.local_estoque_id] || '—'}</td>
                   <td style={{ padding: '8px', textAlign: 'right', fontWeight: 600, color: Number(m.quantidade) < 0 ? 'var(--danger)' : 'var(--success)' }}>
                     {Number(m.quantidade) > 0 ? '+' : ''}{formatarNumero(m.quantidade, 3)}
                   </td>

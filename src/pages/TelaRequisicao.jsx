@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
-import { listarFrentes } from '../lib/frentesApi'
+import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
 import {
@@ -17,7 +17,7 @@ import {
 // Requisição × Transferência, distinguidas pela origem (ver PLANO-TRANSFORMACAO.md): se a origem
 // precisa de liberação (Central, Compras) → Requisição, alguém atende antes de sair. Se quem
 // manda já tem o material em mãos (Produção mandando pra Serviço) → Transferência, só o destino
-// confirma recebimento. As duas emitem movimento no saldo calculado por frente.
+// confirma recebimento. As duas emitem movimento no saldo calculado por local de estoque.
 
 function fmt(n, casas = 3) {
   const x = Number(n)
@@ -28,7 +28,7 @@ function fmt(n, casas = 3) {
 export default function TelaRequisicao({ usuarioLogado, onSair }) {
   const [aba, setAba] = useState('nova') // 'nova' | 'pendentes' | 'historico'
   const [tipo, setTipo] = useState('requisicao') // 'requisicao' | 'transferencia'
-  const [frentes, setFrentes] = useState([])
+  const [locais, setLocais] = useState([])
   const [pendentesReq, setPendentesReq] = useState([])
   const [pendentesTransf, setPendentesTransf] = useState([])
   const [historicoReq, setHistoricoReq] = useState([])
@@ -39,10 +39,10 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
   const carregar = useCallback(async () => {
     try {
       const [f, pr, pt, hr, ht] = await Promise.all([
-        listarFrentes(), listarRequisicoesPendentes(), listarTransferenciasPendentes(),
+        listarLocaisEstoque(), listarRequisicoesPendentes(), listarTransferenciasPendentes(),
         listarRequisicoesHistorico(), listarTransferenciasHistorico()
       ])
-      setFrentes(f); setPendentesReq(pr); setPendentesTransf(pt); setHistoricoReq(hr); setHistoricoTransf(ht)
+      setLocais(f); setPendentesReq(pr); setPendentesTransf(pt); setHistoricoReq(hr); setHistoricoTransf(ht)
       setErro('')
     } catch (e) {
       setErro('Não consegui carregar — ' + e.message)
@@ -59,7 +59,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
         <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
           <div style={{ minWidth: 0 }}>
             <span className="unidade">Requisição / Transferência</span>
-            <p className="muted" style={{ margin: '2px 0 0' }}>pedir e mandar material entre frentes</p>
+            <p className="muted" style={{ margin: '2px 0 0' }}>pedir e mandar material entre locais de estoque</p>
           </div>
           <button className="ghost" onClick={onSair} style={{ flexShrink: 0 }}>Voltar</button>
         </div>
@@ -79,7 +79,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
         <>
           {aba === 'nova' && (
             <FormNova
-              frentes={frentes} tipo={tipo} setTipo={setTipo}
+              locais={locais} tipo={tipo} setTipo={setTipo}
               usuario={usuarioLogado?.nome}
               onPronto={carregar} onErro={setErro}
             />
@@ -102,7 +102,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
   )
 }
 
-function FormNova({ frentes, tipo, setTipo, usuario, onPronto, onErro }) {
+function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
   const [origemId, setOrigemId] = useState('')
   const [destinoId, setDestinoId] = useState('')
   const [produto, setProduto] = useState(null)
@@ -130,13 +130,13 @@ function FormNova({ frentes, tipo, setTipo, usuario, onPronto, onErro }) {
     try {
       if (tipo === 'requisicao') {
         await criarRequisicao({
-          frenteSolicitanteId: destinoId, frenteAtendenteId: origemId,
+          localSolicitanteId: destinoId, localAtendenteId: origemId,
           codigoEverest: produto.codigo_everest, quantidadeSolicitada: qtd, usuario
         })
-        setMsg('Requisição enviada — aguardando a frente de origem atender.')
+        setMsg('Requisição enviada — aguardando o local de origem atender.')
       } else {
         await criarTransferencia({
-          frenteOrigemId: origemId, frenteDestinoId: destinoId,
+          localOrigemId: origemId, localDestinoId: destinoId,
           codigoEverest: produto.codigo_everest, quantidade: qtd, usuario
         })
         setMsg('Transferência enviada — aguardando o destino confirmar recebimento.')
@@ -167,7 +167,7 @@ function FormNova({ frentes, tipo, setTipo, usuario, onPronto, onErro }) {
           <label className="muted">De (origem)</label>
           <select value={origemId} onChange={(e) => setOrigemId(e.target.value)}>
             <option value="">Selecione…</option>
-            {frentes.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
           </select>
         </div>
         <button type="button" className="ghost" onClick={inverter} title="Inverter" style={{ flexShrink: 0 }}>⇄</button>
@@ -175,7 +175,7 @@ function FormNova({ frentes, tipo, setTipo, usuario, onPronto, onErro }) {
           <label className="muted">Para (destino)</label>
           <select value={destinoId} onChange={(e) => setDestinoId(e.target.value)}>
             <option value="">Selecione…</option>
-            {frentes.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
           </select>
         </div>
       </div>

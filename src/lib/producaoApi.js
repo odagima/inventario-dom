@@ -1,42 +1,48 @@
 import { supabase } from './supabase'
 import { calcularFCTeorico } from './fatoresCorrecaoApi'
 
-// ── PRODUÇÃO (migration_v14.sql, com frente desde migration_v15.sql) ─────────
+// ── PRODUÇÃO (migration_v14.sql, com local de estoque desde migration_v15.sql) ───────────────
 // Registro da etapa de transformação: o que entrou, o que saiu, e quanto rendeu de verdade.
 //
 // O saldo por CONTAGEM continua exatamente como sempre foi: MEDIDO pela contagem, nunca calculado
 // por movimento (`itens_contagem`/`Saldo.jsx`, intocados por este módulo).
 //
-// Desde a v15, quando a produção tem `frente_id`, finalizar TAMBÉM lança movimento no saldo
-// CALCULADO por frente (`estoque_movimentos`/`saldo_calculado_frente`, ver `estoqueMovimentosApi.js`)
-// — ledger próprio, separado do saldo por contagem, pra não arriscar duplicar contagem. Produção
-// sem frente (lançamento antigo, ou alguém sem frente escolhida) não lança nenhum movimento.
+// Desde a v15, quando a produção tem `local_estoque_id`, finalizar TAMBÉM lança movimento no
+// saldo CALCULADO por local de estoque (`estoque_movimentos`/`saldo_calculado_local`, ver
+// `estoqueMovimentosApi.js`) — ledger próprio, separado do saldo por contagem, pra não arriscar
+// duplicar contagem. Produção sem local (lançamento antigo, ou alguém sem local escolhido) não
+// lança nenhum movimento.
 //
 // Módulo próprio (e não dentro de api.js) porque produção não tem nada a ver com o fluxo de
-// sessão/contagem: não tem itens esperados, não tem loja (tem frente), não finaliza no mesmo dia.
+// sessão/contagem: não tem itens esperados, não tem loja (tem local de estoque), não finaliza no
+// mesmo dia.
+//
+// "Local de estoque" era chamado de "frente" até a migration_v19.sql — renomeado a pedido do
+// Felipe (06/10/2026): "frente" não comunicava bem, e "praça" já é o posto de trabalho da cozinha
+// (outra coisa).
 
 const SELECT_PRODUCAO = `
   id, data, turno, status, usuario_inicio, usuario_fim, iniciada_em, finalizada_em,
-  planejada, meta_quantidade, meta_codigo_everest, observacao, frente_id, producao_origem_id,
-  frentes ( nome ),
+  planejada, meta_quantidade, meta_codigo_everest, observacao, local_estoque_id, producao_origem_id,
+  locais_estoque ( nome ),
   producoes_itens ( id, papel, codigo_everest, produto_id, quantidade, unidade, usuario, registrado_em, produtos ( nome, unidade_medida ) )
 `
 
 // Produção em andamento pertence à COZINHA, não a quem abriu: quem inicia pode não ser quem
 // finaliza (troca de turno, preparo que atravessa dias). Por isso a lista NÃO filtra por usuário.
-// `frenteId` é opcional — filtra pra só a frente de quem está vendo, quando fizer sentido na tela.
-// Só traz produções que JÁ têm pelo menos uma entrada (as "planejadas" sem item vivem em
+// `localEstoqueId` é opcional — filtra pra só o local de quem está vendo, quando fizer sentido na
+// tela. Só traz produções que JÁ têm pelo menos uma entrada (as "planejadas" sem item vivem em
 // `listarProducoesPlanejadas`, pra não misturar "a fazer" com "sendo feita agora") E que sejam
 // RAIZ da cadeia (sem `producao_origem_id`) — desde que a tela de Produção passou a mostrar a
 // cadeia inteira numa página só (§ pedido do Felipe, 02/10/2026, ver `buscarCadeiaProducao`), uma
 // etapa intermediária não aparece mais como item separado aqui, só dentro da cadeia da sua raiz.
-export async function listarProducoesEmAndamento(frenteId) {
+export async function listarProducoesEmAndamento(localEstoqueId) {
   let q = supabase
     .from('producoes')
     .select(SELECT_PRODUCAO)
     .eq('status', 'em_andamento')
     .is('producao_origem_id', null)
-  if (frenteId) q = q.eq('frente_id', frenteId)
+  if (localEstoqueId) q = q.eq('local_estoque_id', localEstoqueId)
   const { data, error } = await q.order('iniciada_em', { ascending: true }) // a mais antiga primeiro: é a que está esperando há mais tempo
   if (error) throw error
   return (data || []).filter((p) => (p.producoes_itens || []).length > 0)
@@ -45,24 +51,24 @@ export async function listarProducoesEmAndamento(frenteId) {
 // "A fazer": linhas planejadas (campos que já existiam desde a v14, sem tela até agora — pedido
 // do Felipe) que ainda não têm nenhum item lançado. Viram "em andamento" assim que alguém usa
 // `iniciarProducaoPlanejada`.
-export async function listarProducoesPlanejadas(frenteId) {
+export async function listarProducoesPlanejadas(localEstoqueId) {
   let q = supabase
     .from('producoes')
     .select(SELECT_PRODUCAO)
     .eq('planejada', true)
     .eq('status', 'em_andamento')
-  if (frenteId) q = q.eq('frente_id', frenteId)
+  if (localEstoqueId) q = q.eq('local_estoque_id', localEstoqueId)
   const { data, error } = await q.order('iniciada_em', { ascending: true })
   if (error) throw error
   return (data || []).filter((p) => (p.producoes_itens || []).length === 0)
 }
 
-export async function criarProducaoPlanejada({ data, frenteId, metaCodigoEverest, metaQuantidade, observacao, usuario }) {
+export async function criarProducaoPlanejada({ data, localEstoqueId, metaCodigoEverest, metaQuantidade, observacao, usuario }) {
   const { data: producao, error } = await supabase
     .from('producoes')
     .insert({
       data,
-      frente_id: frenteId || null,
+      local_estoque_id: localEstoqueId || null,
       planejada: true,
       meta_codigo_everest: metaCodigoEverest,
       meta_quantidade: metaQuantidade != null ? Number(metaQuantidade) : null,
@@ -98,7 +104,7 @@ export async function listarProducoes({ status, dataInicio, dataFim, limite = 20
 
 // Abre a produção JÁ COM a entrada. Abrir vazio permitiria uma produção sem nada dentro ocupando
 // o painel — e "o que estou produzindo" sem dizer de quê não ajuda ninguém.
-export async function abrirProducao({ data, turno, usuario, entrada, observacao, frenteId, producaoOrigemId }) {
+export async function abrirProducao({ data, turno, usuario, entrada, observacao, localEstoqueId, producaoOrigemId }) {
   if (!entrada?.codigoEverest) throw new Error('Produção precisa de pelo menos um item de entrada.')
   if (!(Number(entrada.quantidade) > 0)) throw new Error('A quantidade de entrada precisa ser maior que zero.')
 
@@ -106,7 +112,7 @@ export async function abrirProducao({ data, turno, usuario, entrada, observacao,
     .from('producoes')
     .insert({
       data, turno: turno || null, usuario_inicio: usuario || null, observacao: observacao || null,
-      frente_id: frenteId || null,
+      local_estoque_id: localEstoqueId || null,
       producao_origem_id: producaoOrigemId || null
     })
     .select()

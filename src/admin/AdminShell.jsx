@@ -28,7 +28,7 @@ import FatoresCorrecao from './pages/FatoresCorrecao'
 import Cobertura from './pages/Cobertura'
 import Backup from './pages/Backup'
 import Painel from './pages/Painel'
-import FrentesProducao from './pages/FrentesProducao'
+import LocaisEstoque from './pages/LocaisEstoque'
 import ConfiguracoesSistema from './pages/ConfiguracoesSistema'
 import ResumoDiario from './components/ResumoDiario'
 import AlertaFimDeMes from './components/AlertaFimDeMes'
@@ -102,7 +102,7 @@ const MODULOS = [
     titulo: 'Produção',
     abas: [
       { id: 'prod_analise', label: 'Análise / Dashboard', perm: 'custos.ver' },
-      { id: 'prod_frentes', label: 'Frentes e saldo calculado', perm: 'custos.ver' },
+      { id: 'prod_locais', label: 'Locais de estoque e saldo calculado', perm: 'custos.ver' },
       { id: 'prod_historico', label: 'Histórico', perm: 'contagens.ver' },
       { id: 'prod_exportar', label: 'Exportar / Importar', perm: 'contagens.ver' }
     ]
@@ -286,7 +286,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
 
           {/* ── PRODUÇÃO ── */}
           {aba === 'prod_analise' && <AnaliseProducao />}
-          {aba === 'prod_frentes' && <FrentesProducao />}
+          {aba === 'prod_locais' && <LocaisEstoque />}
           {aba === 'prod_historico' && <Relatorio tipoFiltro="producao" mostrarExportEverest={false} />}
           {aba === 'prod_exportar' && <Relatorio tipoFiltro="producao" mostrarExportEverest />}
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
-import { listarFrentes } from '../lib/frentesApi'
+import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarFatoresCorrecao, calcularFCTeorico, filhosDiretos, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
 import { registrarMovimento } from '../lib/estoqueMovimentosApi'
 import { buscarProdutosPorCodigosEverest } from '../lib/api'
@@ -27,7 +27,7 @@ import {
 // A produção é da COZINHA, não de quem abriu — a lista mostra tudo que está aberto, e qualquer
 // pessoa fecha. Resolve troca de turno e preparo de vários dias sem caso especial.
 //
-// Fluxo: "peguei 10 kg de filet peça" (abre, escolhe a frente) → some do caminho de quem lançou,
+// Fluxo: "peguei 10 kg de filet peça" (abre, escolhe o local de estoque) → some do caminho de quem lançou,
 // fica no painel → quem reabre vê a cadeia inteira numa tela só: o insumo base no topo, e cada
 // etapa (o que saiu, e o que saiu DO que saiu) logo abaixo — sem precisar navegar de tela em tela
 // pra continuar porcionando. Cada etapa continua sendo seu próprio registro de produção por baixo
@@ -66,7 +66,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
   const [erro, setErro] = useState('')
   const [tela, setTela] = useState('painel') // 'painel' | 'abrir' | 'processo' | 'planejar'
   const [processoRaizId, setProcessoRaizId] = useState(null)
-  const [prefill, setPrefill] = useState(null) // { frenteId, planejadaId, metaCodigoEverest, metaQuantidade } — só pra "Iniciar" numa planejada
+  const [prefill, setPrefill] = useState(null) // { localEstoqueId, planejadaId, metaCodigoEverest, metaQuantidade } — só pra "Iniciar" numa planejada
 
   const carregar = useCallback(async (silencioso = false) => {
     try {
@@ -89,7 +89,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
   }
 
   function iniciarPlanejada(p) {
-    setPrefill({ frenteId: p.frente_id, planejadaId: p.id, metaCodigoEverest: p.meta_codigo_everest, metaQuantidade: p.meta_quantidade })
+    setPrefill({ localEstoqueId: p.local_estoque_id, planejadaId: p.id, metaCodigoEverest: p.meta_codigo_everest, metaQuantidade: p.meta_quantidade })
     setTela('abrir')
   }
 
@@ -147,7 +147,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
                         {p.meta_quantidade ? `${fmt(p.meta_quantidade)} ` : ''}{p.meta_codigo_everest}
                       </p>
                       <p className="muted" style={{ margin: '2px 0 0', fontSize: 11.5 }}>
-                        {p.frentes?.nome || 'sem frente'} · {p.observacao || 'planejado'}
+                        {p.locais_estoque?.nome || 'sem local'} · {p.observacao || 'planejado'}
                       </p>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -189,7 +189,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
                       </p>
                     ))}
                     <p className="muted" style={{ margin: '2px 0 0', fontSize: 11.5 }}>
-                      {p.frentes?.nome ? `${p.frentes.nome} · ` : ''}{p.usuario_inicio || '—'} · {diasAtras(p.iniciada_em)}
+                      {p.locais_estoque?.nome ? `${p.locais_estoque.nome} · ` : ''}{p.usuario_inicio || '—'} · {diasAtras(p.iniciada_em)}
                       {saidas.length > 0 && ` · ${saidas.length} ${saidas.length === 1 ? 'item já pesado' : 'itens já pesados'}`}
                     </p>
                   </button>
@@ -230,21 +230,21 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
 // ── Planejar: só registra "o que falta produzir" (meta), sem pesar nada ainda ─────────────────
 function FormPlanejar({ usuario, onPronto, onErro }) {
-  const [frentes, setFrentes] = useState([])
-  const [frenteId, setFrenteId] = useState('')
+  const [locais, setLocais] = useState([])
+  const [localEstoqueId, setLocalEstoqueId] = useState('')
   const [categoria, setCategoria] = useState(CATEGORIAS[1])
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
   const [observacao, setObservacao] = useState('')
   const [salvando, setSalvando] = useState(false)
 
-  useEffect(() => { listarFrentes().then(setFrentes).catch((e) => onErro(e.message)) }, [onErro])
+  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
 
   async function salvar() {
     setSalvando(true)
     try {
       await criarProducaoPlanejada({
-        data: hojeIso(), frenteId, metaCodigoEverest: produto.codigo_everest,
+        data: hojeIso(), localEstoqueId, metaCodigoEverest: produto.codigo_everest,
         metaQuantidade: quantidade ? Number(String(quantidade).replace(',', '.')) : null,
         observacao, usuario
       })
@@ -259,10 +259,10 @@ function FormPlanejar({ usuario, onPronto, onErro }) {
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div>
-        <label className="muted">Frente</label>
-        <select value={frenteId} onChange={(e) => setFrenteId(e.target.value)}>
+        <label className="muted">Local de estoque</label>
+        <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
           <option value="">Selecione…</option>
-          {frentes.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+          {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
         </select>
       </div>
       {!produto ? (
@@ -291,7 +291,7 @@ function FormPlanejar({ usuario, onPronto, onErro }) {
             <label className="muted">Observação — opcional</label>
             <input type="text" value={observacao} onChange={(e) => setObservacao(e.target.value)} placeholder="ex.: pro final de semana" />
           </div>
-          <button className="primary" onClick={salvar} disabled={salvando || !frenteId} style={{ width: '100%' }}>
+          <button className="primary" onClick={salvar} disabled={salvando || !localEstoqueId} style={{ width: '100%' }}>
             {salvando ? 'Salvando…' : 'Adicionar ao "a fazer"'}
           </button>
         </>
@@ -300,17 +300,17 @@ function FormPlanejar({ usuario, onPronto, onErro }) {
   )
 }
 
-// ── Abrir: a entrada ("o que eu peguei") + a frente ──────────────────────────────────────────
+// ── Abrir: a entrada ("o que eu peguei") + o local de estoque ────────────────────────────────
 function FormAbrir({ usuario, prefill, onPronto, onErro }) {
   const [data, setData] = useState(hojeIso())
-  const [frentes, setFrentes] = useState([])
-  const [frenteId, setFrenteId] = useState(prefill?.frenteId || '')
+  const [locais, setLocais] = useState([])
+  const [localEstoqueId, setLocalEstoqueId] = useState(prefill?.localEstoqueId || '')
   const [categoria, setCategoria] = useState(CATEGORIAS[0])
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
   const [salvando, setSalvando] = useState(false)
 
-  useEffect(() => { listarFrentes().then(setFrentes).catch((e) => onErro(e.message)) }, [onErro])
+  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
 
   const qtd = Number(String(quantidade).replace(',', '.'))
 
@@ -326,7 +326,7 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
       if (prefill?.planejadaId) {
         await iniciarProducaoPlanejada(prefill.planejadaId, entrada, usuario)
       } else {
-        await abrirProducao({ data, usuario, entrada, frenteId })
+        await abrirProducao({ data, usuario, entrada, localEstoqueId })
       }
       onPronto()
     } catch (e) {
@@ -350,10 +350,10 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
 
       {!prefill?.planejadaId && (
         <div>
-          <label className="muted">Frente</label>
-          <select value={frenteId} onChange={(e) => setFrenteId(e.target.value)}>
+          <label className="muted">Local de estoque</label>
+          <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
             <option value="">Selecione…</option>
-            {frentes.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
           </select>
         </div>
       )}
@@ -390,7 +390,7 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
             Só esse peso aqui é bruto — os itens que saírem depois só pedem o líquido de cada um.
           </p>
-          <button className="primary" onClick={salvar} disabled={salvando || !(qtd > 0) || (!prefill?.planejadaId && !frenteId)} style={{ width: '100%' }}>
+          <button className="primary" onClick={salvar} disabled={salvando || !(qtd > 0) || (!prefill?.planejadaId && !localEstoqueId)} style={{ width: '100%' }}>
             {salvando ? 'Abrindo…' : 'Iniciar produção'}
           </button>
         </>
@@ -424,7 +424,7 @@ function FormProcesso({ raizId, usuario, onErro }) {
     try {
       await abrirProducao({
         data: hojeIso(), usuario,
-        frenteId: etapaOrigem.frente_id,
+        localEstoqueId: etapaOrigem.local_estoque_id,
         producaoOrigemId: etapaOrigem.id,
         entrada: { codigoEverest: item.codigo_everest, produtoId: item.produto_id, quantidade: Number(item.quantidade), unidade: item.unidade }
       })
@@ -451,7 +451,7 @@ function FormProcesso({ raizId, usuario, onErro }) {
         <p className="muted" style={{ margin: 0, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Produzindo</p>
         <p style={{ margin: '2px 0 0', fontWeight: 700, fontSize: 16 }}>{nomeRaiz}</p>
         <p className="muted" style={{ margin: '4px 0 0', fontSize: 11.5 }}>
-          {raiz.frentes?.nome ? `${raiz.frentes.nome} · ` : ''}aberta por {raiz.usuario_inicio || '—'} · {diasAtras(raiz.iniciada_em)}
+          {raiz.locais_estoque?.nome ? `${raiz.locais_estoque.nome} · ` : ''}aberta por {raiz.usuario_inicio || '—'} · {diasAtras(raiz.iniciada_em)}
         </p>
       </div>
 
@@ -552,14 +552,14 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
     setSalvando(true)
     try {
       await finalizarProducao(producao.id, usuario)
-      // Saldo calculado da frente: credita cada saída, debita cada entrada. Produção sem frente
-      // (lançamentos antigos, ou alguém sem frente escolhida) não mexe em saldo nenhum.
-      if (producao.frente_id) {
+      // Saldo calculado do local de estoque: credita cada saída, debita cada entrada. Produção
+      // sem local (lançamentos antigos, ou alguém sem local escolhido) não mexe em saldo nenhum.
+      if (producao.local_estoque_id) {
         for (const e of entradas) {
-          await registrarMovimento({ frenteId: producao.frente_id, codigoEverest: e.codigo_everest, quantidade: -Number(e.quantidade), tipo: 'producao_entrada', producaoId: producao.id, usuario })
+          await registrarMovimento({ localEstoqueId: producao.local_estoque_id, codigoEverest: e.codigo_everest, quantidade: -Number(e.quantidade), tipo: 'producao_entrada', producaoId: producao.id, usuario })
         }
         for (const s of saidas) {
-          await registrarMovimento({ frenteId: producao.frente_id, codigoEverest: s.codigo_everest, quantidade: Number(s.quantidade), tipo: 'producao_saida', producaoId: producao.id, usuario })
+          await registrarMovimento({ localEstoqueId: producao.local_estoque_id, codigoEverest: s.codigo_everest, quantidade: Number(s.quantidade), tipo: 'producao_saida', producaoId: producao.id, usuario })
         }
       }
       setConfirmandoFinalizar(false)
@@ -773,7 +773,7 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
           onClick={() => !salvando && setConfirmandoFinalizar(false)}
         >
           <div className="card" style={{ maxWidth: 360, width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }} onClick={(e) => e.stopPropagation()}>
-            <p style={{ margin: 0, fontWeight: 600 }}>Confere antes de fechar — isso grava no saldo da frente</p>
+            <p style={{ margin: 0, fontWeight: 600 }}>Confere antes de fechar — isso grava no saldo do local de estoque</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {saidas.map((s) => (
                 <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>

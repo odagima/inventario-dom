@@ -7,19 +7,19 @@ import { registrarMovimento } from './estoqueMovimentosApi'
 // (Produção mandando pra Serviço, ou devolvendo pro Central) → Transferência, só o destino
 // confirma recebimento, sem gate de autorização.
 //
-// Autorização de verdade (quem aprova requisição) fica fora disso — combinado adiar pra quando
-// chegar a fundação de perfil/acesso; por ora todo mundo com acesso à tela pode atender.
+// Atender requisição exige permissão (ver `podeAtenderRequisicao` em src/lib/permissoes.js) —
+// transferência continua sem gate, por design (quem manda já tem o material em mãos).
 
 const SELECT_REQUISICAO = `
   id, codigo_everest, quantidade_solicitada, quantidade_atendida, status,
   usuario_solicitante, usuario_atendente, solicitado_em, atendido_em, observacao,
-  solicitante:frentes!requisicoes_frente_solicitante_id_fkey ( id, nome ),
-  atendente:frentes!requisicoes_frente_atendente_id_fkey ( id, nome )
+  solicitante:locais_estoque!requisicoes_local_solicitante_id_fkey ( id, nome ),
+  atendente:locais_estoque!requisicoes_local_atendente_id_fkey ( id, nome )
 `
 
-export async function listarRequisicoesPendentes(frenteAtendenteId) {
+export async function listarRequisicoesPendentes(localAtendenteId) {
   let q = supabase.from('requisicoes').select(SELECT_REQUISICAO).in('status', ['pendente', 'atendida_parcial'])
-  if (frenteAtendenteId) q = q.eq('frente_atendente_id', frenteAtendenteId)
+  if (localAtendenteId) q = q.eq('local_atendente_id', localAtendenteId)
   const { data, error } = await q.order('solicitado_em', { ascending: true })
   if (error) throw error
   return data || []
@@ -35,14 +35,14 @@ export async function listarRequisicoesHistorico(limite = 200) {
   return data || []
 }
 
-export async function criarRequisicao({ frenteSolicitanteId, frenteAtendenteId, codigoEverest, quantidadeSolicitada, usuario, observacao }) {
-  if (frenteSolicitanteId === frenteAtendenteId) throw new Error('Origem e destino precisam ser diferentes.')
+export async function criarRequisicao({ localSolicitanteId, localAtendenteId, codigoEverest, quantidadeSolicitada, usuario, observacao }) {
+  if (localSolicitanteId === localAtendenteId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidadeSolicitada) > 0)) throw new Error('Informe uma quantidade maior que zero.')
   const { data, error } = await supabase
     .from('requisicoes')
     .insert({
-      frente_solicitante_id: frenteSolicitanteId,
-      frente_atendente_id: frenteAtendenteId,
+      local_solicitante_id: localSolicitanteId,
+      local_atendente_id: localAtendenteId,
       codigo_everest: codigoEverest,
       quantidade_solicitada: Number(quantidadeSolicitada),
       usuario_solicitante: usuario || null
@@ -68,11 +68,11 @@ export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora,
   const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
 
   await registrarMovimento({
-    frenteId: req.frente_atendente_id, codigoEverest: req.codigo_everest, quantidade: -qtd,
+    localEstoqueId: req.local_atendente_id, codigoEverest: req.codigo_everest, quantidade: -qtd,
     tipo: 'requisicao_saida', requisicaoId, usuario
   })
   await registrarMovimento({
-    frenteId: req.frente_solicitante_id, codigoEverest: req.codigo_everest, quantidade: qtd,
+    localEstoqueId: req.local_solicitante_id, codigoEverest: req.codigo_everest, quantidade: qtd,
     tipo: 'requisicao_entrada', requisicaoId, usuario
   })
 
@@ -89,13 +89,13 @@ export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora,
 
 const SELECT_TRANSFERENCIA = `
   id, codigo_everest, quantidade, status, usuario_envio, usuario_recebimento, enviado_em, recebido_em,
-  origem:frentes!transferencias_frente_origem_id_fkey ( id, nome ),
-  destino:frentes!transferencias_frente_destino_id_fkey ( id, nome )
+  origem:locais_estoque!transferencias_local_origem_id_fkey ( id, nome ),
+  destino:locais_estoque!transferencias_local_destino_id_fkey ( id, nome )
 `
 
-export async function listarTransferenciasPendentes(frenteDestinoId) {
+export async function listarTransferenciasPendentes(localDestinoId) {
   let q = supabase.from('transferencias').select(SELECT_TRANSFERENCIA).eq('status', 'enviada')
-  if (frenteDestinoId) q = q.eq('frente_destino_id', frenteDestinoId)
+  if (localDestinoId) q = q.eq('local_destino_id', localDestinoId)
   const { data, error } = await q.order('enviado_em', { ascending: true })
   if (error) throw error
   return data || []
@@ -113,13 +113,13 @@ export async function listarTransferenciasHistorico(limite = 200) {
 
 // Debita a origem no envio — fica "em trânsito" (nem origem nem destino têm o produto nesse
 // meio-tempo) até o destino confirmar recebimento, que credita de verdade.
-export async function criarTransferencia({ frenteOrigemId, frenteDestinoId, codigoEverest, quantidade, usuario }) {
-  if (frenteOrigemId === frenteDestinoId) throw new Error('Origem e destino precisam ser diferentes.')
+export async function criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario }) {
+  if (localOrigemId === localDestinoId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidade) > 0)) throw new Error('Informe uma quantidade maior que zero.')
   const { data: transferencia, error } = await supabase
     .from('transferencias')
     .insert({
-      frente_origem_id: frenteOrigemId, frente_destino_id: frenteDestinoId,
+      local_origem_id: localOrigemId, local_destino_id: localDestinoId,
       codigo_everest: codigoEverest, quantidade: Number(quantidade), usuario_envio: usuario || null
     })
     .select()
@@ -127,7 +127,7 @@ export async function criarTransferencia({ frenteOrigemId, frenteDestinoId, codi
   if (error) throw error
 
   await registrarMovimento({
-    frenteId: frenteOrigemId, codigoEverest, quantidade: -Number(quantidade),
+    localEstoqueId: localOrigemId, codigoEverest, quantidade: -Number(quantidade),
     tipo: 'transferencia_saida', transferenciaId: transferencia.id, usuario
   })
   return transferencia
@@ -139,7 +139,7 @@ export async function confirmarRecebimentoTransferencia(transferenciaId, usuario
   if (transferencia.status !== 'enviada') throw new Error('Essa transferência já foi recebida ou cancelada.')
 
   await registrarMovimento({
-    frenteId: transferencia.frente_destino_id, codigoEverest: transferencia.codigo_everest, quantidade: Number(transferencia.quantidade),
+    localEstoqueId: transferencia.local_destino_id, codigoEverest: transferencia.codigo_everest, quantidade: Number(transferencia.quantidade),
     tipo: 'transferencia_entrada', transferenciaId, usuario
   })
 

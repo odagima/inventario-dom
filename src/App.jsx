@@ -86,9 +86,10 @@ export default function App() {
   // de volta nele quando a pessoa não tem perfil vinculado (ninguém perde acesso na transição).
   if (modo === 'admin') return <AdminShell nivelAcesso={usuarioAtual?.nivelAcesso} usuario={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'produtividade') return <ProdutividadeShell usuarioLogado={usuarioAtual} onVoltar={voltarPraHome} />
-  // Produção não passa por SelecaoUnidade: a frente é escolhida dentro da própria tela (não é
-  // "loja", é migration_v15.sql) e não tem sessão por usuário — a lista de "em produção" é
-  // compartilhada por toda a cozinha, cada produção já carregando sua própria frente.
+  // Produção não passa por SelecaoUnidade: o local de estoque é escolhido dentro da própria tela
+  // (não é "loja", é migration_v15.sql, renomeado de "frente" na migration_v19.sql) e não tem
+  // sessão por usuário — a lista de "em produção" é compartilhada por toda a cozinha, cada
+  // produção já carregando seu próprio local de estoque.
   if (modo === 'producao') return <TelaProducao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'requisicao') return <TelaRequisicao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
 
