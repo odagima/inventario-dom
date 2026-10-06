@@ -10,6 +10,15 @@ export async function buscarConfiguracoes() {
   return data || []
 }
 
+// Lê um interruptor só — usado pelas telas que PRECISAM decidir um comportamento (não só mostrar
+// a lista no painel). Se a linha não existir ainda (configuração nova, migração não rodada),
+// devolve `false` em vez de quebrar a tela que depende dela.
+export async function buscarConfiguracao(chave) {
+  const { data, error } = await supabase.from('configuracoes_sistema').select('valor').eq('chave', chave).maybeSingle()
+  if (error) throw error
+  return data?.valor ?? false
+}
+
 export async function definirConfiguracao(chave, valor, usuario) {
   const { error } = await supabase
     .from('configuracoes_sistema')

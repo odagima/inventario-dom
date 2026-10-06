@@ -129,11 +129,11 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
     setMsg('')
     try {
       if (tipo === 'requisicao') {
-        await criarRequisicao({
+        const resultado = await criarRequisicao({
           localSolicitanteId: destinoId, localAtendenteId: origemId,
           codigoEverest: produto.codigo_everest, quantidadeSolicitada: qtd, usuario
         })
-        setMsg('Requisição enviada — aguardando o local de origem atender.')
+        setMsg(resultado.autoAtendida ? 'Requisição atendida na hora.' : 'Requisição enviada — aguardando o local de origem atender.')
       } else {
         await criarTransferencia({
           localOrigemId: origemId, localDestinoId: destinoId,

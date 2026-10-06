@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { registrarMovimento } from './estoqueMovimentosApi'
+import { buscarConfiguracao } from './configuracoesApi'
 
 // Requisição × Transferência (migration_v15.sql), distinguidas pela origem (ver
 // PLANO-TRANSFORMACAO.md): se a origem é um estoque/cofre que precisa de liberação (Central,
@@ -35,6 +36,13 @@ export async function listarRequisicoesHistorico(limite = 200) {
   return data || []
 }
 
+// `requisicao_exige_aprovacao` (migration_v18.sql, ver configuracoesApi.js) decide o que acontece
+// logo depois de criar: pedido do Felipe (06/10/2026) — "a princípio eu quero que passe direto,
+// sem ir pra aprovação". DESLIGADO (padrão hoje) = atende sozinha na hora, com a quantidade cheia,
+// sem precisar de ninguém com permissão clicar em "Atender". LIGADO = fica pendente como hoje,
+// esperando atendimento manual (`podeAtenderRequisicao`, src/lib/permissoes.js). Enquanto estiver
+// desligado, a restrição de quem pode liberar material de um local controlado não se aplica —
+// qualquer um que crie a requisição efetivamente já libera o próprio material na hora.
 export async function criarRequisicao({ localSolicitanteId, localAtendenteId, codigoEverest, quantidadeSolicitada, usuario, observacao }) {
   if (localSolicitanteId === localAtendenteId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidadeSolicitada) > 0)) throw new Error('Informe uma quantidade maior que zero.')
@@ -50,7 +58,15 @@ export async function criarRequisicao({ localSolicitanteId, localAtendenteId, co
     .select()
     .single()
   if (error) throw error
-  return data
+
+  let exigeAprovacao = false
+  try { exigeAprovacao = await buscarConfiguracao('requisicao_exige_aprovacao') } catch { /* configuração ainda não existe — trata como desligada */ }
+
+  if (!exigeAprovacao) {
+    await atenderRequisicao(data.id, { quantidadeAtendidaAgora: Number(quantidadeSolicitada), usuario: 'Sistema (auto, sem aprovação)' })
+  }
+
+  return { ...data, autoAtendida: !exigeAprovacao }
 }
 
 // Atendimento parcial é normal: fecha com o que de fato foi enviado, sem travar a requisição.
