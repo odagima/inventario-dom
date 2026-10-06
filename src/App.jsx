@@ -53,6 +53,9 @@ export default function App() {
   const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'contagem' | 'producao' | 'requisicao' | 'produtividade' | 'cadastro' | 'admin'
   const [contexto, setContexto] = useState(null) // { sessao, unidade, grupo } — unidade fica null na contagem semanal (sem loja)
   const [usuarioAtual, setUsuarioAtual] = useState(usuarioSalvo)
+  // Perdas/Desperdícios ganhou botão próprio na Home (06/10/2026) — entra direto nesse tipo, sem
+  // passar pela lista "o que você vai fazer" (ver SelecaoUnidade.jsx `tipoFixo`).
+  const [tipoFixoContagem, setTipoFixoContagem] = useState(null)
 
   // Renova a validade enquanto a pessoa está usando: quem passou o turno inteiro no app não é
   // deslogado no meio só porque entrou há 12h.
@@ -75,6 +78,7 @@ export default function App() {
 
   function voltarPraHome() {
     setContexto(null)
+    setTipoFixoContagem(null)
     setModo('home')
   }
 
@@ -95,7 +99,7 @@ export default function App() {
 
   if (modo === 'contagem') {
     if (!contexto) {
-      return <SelecaoUnidade usuarioLogado={usuarioAtual} onSessaoPronta={setContexto} onVoltar={voltarPraHome} />
+      return <SelecaoUnidade usuarioLogado={usuarioAtual} tipoFixo={tipoFixoContagem} onSessaoPronta={setContexto} onVoltar={voltarPraHome} />
     }
     // Perdas tem tela própria (loop item → motivo → quantidade); ver src/pages/TelaPerdas.jsx.
     if (contexto.sessao?.tipo === 'perdas') {
@@ -124,7 +128,8 @@ export default function App() {
   return (
     <HomeScreen
       usuarioLogado={usuarioAtual}
-      onEntrarContagem={() => setModo('contagem')}
+      onEntrarContagem={() => { setTipoFixoContagem(null); setModo('contagem') }}
+      onEntrarPerdas={() => { setTipoFixoContagem('perdas'); setModo('contagem') }}
       onEntrarProducao={() => setModo('producao')}
       onEntrarRequisicao={() => setModo('requisicao')}
       onEntrarProdutividade={() => setModo('produtividade')}

@@ -207,6 +207,37 @@ select option {
   box-shadow: 0 1px 3px rgba(28, 43, 68, 0.06);
 }
 
+/* Grade de ícones (Home e, depois, outras telas de navegação) — pedido do Felipe (06/10/2026):
+   testou mockups de "tile sólido", "contorno minimalista" e "círculo com relevo", escolheu o
+   contorno + sombra leve, que já é exatamente o que `.card` faz acima — só reaproveita o mesmo
+   traço num botão menor, em grade. */
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.icon-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 6px;
+  box-shadow: 0 1px 3px rgba(28, 43, 68, 0.06);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  text-align: center;
+  line-height: 1.25;
+  transition: transform 0.08s ease, box-shadow 0.12s ease;
+}
+.icon-tile:active {
+  transform: scale(0.97);
+  box-shadow: 0 1px 2px rgba(28, 43, 68, 0.08);
+}
+
 .muted { color: var(--text-secondary); font-size: 13px; }
 
 .list-item {

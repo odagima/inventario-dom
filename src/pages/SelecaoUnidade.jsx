@@ -18,14 +18,20 @@ function tipoExigeLoja(tipo) {
   return tipo !== 'semanal' && tipo !== 'perdas'
 }
 
+// "Contagem tempo de produção" (diario) e "Registro de produção" (producao) saíram da lista a
+// pedido do Felipe (06/10/2026) — a 2ª ficou redundante desde que a Produção ganhou tela própria
+// (ver TelaProducao.jsx), a 1ª sobrepõe o que a Produtividade já fazia (também oculta por agora).
+// Ficam só comentadas aqui, não removidas de `tipoExigeLoja`/`tipoUsaData`/`POR_VALOR` — se algum
+// dia voltarem, é só descomentar a linha, o resto do arquivo já trata os dois tipos corretamente.
+// "perdas" também saiu da lista: agora tem botão próprio na Home (ver `tipoFixo` abaixo).
 const TIPOS_CONTAGEM = [
   { valor: 'mensal', label: 'Inventário geral', usaGrupo: false },
-  { valor: 'semanal', label: 'Contagem semanal', usaGrupo: true },
-  { valor: 'diario', label: 'Contagem tempo de produção', usaGrupo: true },
-  { valor: 'producao', label: 'Registro de produção', usaGrupo: false },
-  { valor: 'perdas', label: 'Registro de perdas/desperdício', usaGrupo: false }
+  { valor: 'semanal', label: 'Contagem semanal', usaGrupo: true }
+  // { valor: 'diario', label: 'Contagem tempo de produção', usaGrupo: true },
+  // { valor: 'producao', label: 'Registro de produção', usaGrupo: false },
 ]
-const POR_VALOR = Object.fromEntries(TIPOS_CONTAGEM.map((t) => [t.valor, t]))
+const TIPO_PERDAS = { valor: 'perdas', label: 'Perdas / Desperdícios', usaGrupo: false }
+const POR_VALOR = Object.fromEntries([...TIPOS_CONTAGEM, TIPO_PERDAS].map((t) => [t.valor, t]))
 
 // Tipos que representam um DIA específico (e não um mês fechado), então pedem a data na abertura:
 // a contagem semanal desde 06/08/2026 (§18.1) e o registro de perdas desde 28/08/2026 (§55) —
@@ -51,9 +57,12 @@ function turnoDeAgora() {
 }
 
 // etapa: 'escolha' (tipo + loja + nome) | 'form' (grupo, se precisar) | 'revisao'
-export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar }) {
+//
+// `tipoFixo`: entrada direta pra um tipo específico (hoje só "perdas", botão próprio na Home) —
+// pula a lista "o que você vai fazer" e já cai direto no formulário daquele tipo.
+export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta, onVoltar }) {
   const [etapa, setEtapa] = useState('escolha')
-  const [tipo, setTipo] = useState(null)
+  const [tipo, setTipo] = useState(tipoFixo || null)
   const [unidades, setUnidades] = useState([])
   const [unidadeId, setUnidadeId] = useState('')
   const [grupos, setGrupos] = useState([])
@@ -278,26 +287,28 @@ export default function SelecaoUnidade({ usuarioLogado, onSessaoPronta, onVoltar
       </div>
 
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div>
-          <label className="muted">O que você vai fazer?</label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-            {TIPOS_CONTAGEM.map((t) => (
-              <button
-                key={t.valor}
-                onClick={() => handleEscolherTipo(t.valor)}
-                className={tipo === t.valor ? 'active' : ''}
-                style={{
-                  textAlign: 'left', padding: '12px 14px',
-                  background: tipo === t.valor ? 'var(--accent-soft)' : 'var(--surface-2)',
-                  color: tipo === t.valor ? 'var(--accent-soft-text)' : 'var(--text)',
-                  fontWeight: tipo === t.valor ? 600 : 500
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
+        {!tipoFixo && (
+          <div>
+            <label className="muted">O que você vai fazer?</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+              {TIPOS_CONTAGEM.map((t) => (
+                <button
+                  key={t.valor}
+                  onClick={() => handleEscolherTipo(t.valor)}
+                  className={tipo === t.valor ? 'active' : ''}
+                  style={{
+                    textAlign: 'left', padding: '12px 14px',
+                    background: tipo === t.valor ? 'var(--accent-soft)' : 'var(--surface-2)',
+                    color: tipo === t.valor ? 'var(--accent-soft-text)' : 'var(--text)',
+                    fontWeight: tipo === t.valor ? 600 : 500
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {tipo && (
           <>
