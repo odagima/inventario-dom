@@ -29,6 +29,7 @@ import Cobertura from './pages/Cobertura'
 import Backup from './pages/Backup'
 import Painel from './pages/Painel'
 import LocaisEstoque from './pages/LocaisEstoque'
+import LimpezaTeste from './pages/LimpezaTeste'
 import ConfiguracoesSistema from './pages/ConfiguracoesSistema'
 import ResumoDiario from './components/ResumoDiario'
 import AlertaFimDeMes from './components/AlertaFimDeMes'
@@ -130,7 +131,8 @@ const MODULOS = [
       { id: 'base_historico_ft', label: 'Histórico Ficha Técnica', perm: 'cadastros.ver' },
       { id: 'base_importar', label: 'Importar dados', perm: 'importar.executar' },
       { id: 'base_cobertura', label: 'Cobertura de dados', perm: 'cadastros.ver' },
-      { id: 'base_backup', label: 'Backup', perm: 'dev' }
+      { id: 'base_backup', label: 'Backup', perm: 'dev' },
+      { id: 'base_limpeza_teste', label: 'Limpeza de teste', perm: 'dev' }
     ]
   },
   {
@@ -309,6 +311,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
           {aba === 'base_importar' && <ImportarDados />}
           {aba === 'base_cobertura' && <Cobertura />}
           {aba === 'base_backup' && <Backup />}
+          {aba === 'base_limpeza_teste' && <LimpezaTeste />}
 
           {/* ── CONFIGURAÇÃO ── */}
           {aba === 'cfg_mes' && <ConfiguracaoMensal />}

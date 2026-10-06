@@ -209,6 +209,21 @@ export async function finalizarProducao(producaoId, usuario) {
   if (error) throw error
 }
 
+// Exclusão COMPLETA — produção + itens + movimentos de saldo ligados a ela. Exceção deliberada à
+// regra de "não sumir com nada": existe só pra DEV limpar teste (ver LimpezaTeste.jsx), pedido do
+// Felipe (06/10/2026): "estou fazendo vários testes, e depois preciso apagar". Desce a cadeia
+// (`producao_origem_id` não tem cascade) apagando as etapas FILHAS antes, senão a FK trava.
+export async function removerProducaoCompleta(producaoId) {
+  const filhas = await listarProducoesPorOrigem([producaoId])
+  for (const filha of filhas) {
+    await removerProducaoCompleta(filha.id)
+  }
+  await supabase.from('producoes_itens').delete().eq('producao_id', producaoId)
+  await supabase.from('estoque_movimentos').delete().eq('producao_id', producaoId)
+  const { error } = await supabase.from('producoes').delete().eq('id', producaoId)
+  if (error) throw error
+}
+
 // Cancelar em vez de apagar: o registro sai das contas mas não some (§5, "não sumir com nada").
 export async function cancelarProducao(producaoId, usuario) {
   const { error } = await supabase

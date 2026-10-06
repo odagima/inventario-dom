@@ -133,6 +133,20 @@ export async function criarTransferencia({ localOrigemId, localDestinoId, codigo
   return transferencia
 }
 
+// Exclusão COMPLETA — só DEV, ver LimpezaTeste.jsx (mesmo motivo de `removerProducaoCompleta` em
+// producaoApi.js: limpar teste, "estou fazendo vários testes, e depois preciso apagar").
+export async function removerRequisicaoCompleta(requisicaoId) {
+  await supabase.from('estoque_movimentos').delete().eq('requisicao_id', requisicaoId)
+  const { error } = await supabase.from('requisicoes').delete().eq('id', requisicaoId)
+  if (error) throw error
+}
+
+export async function removerTransferenciaCompleta(transferenciaId) {
+  await supabase.from('estoque_movimentos').delete().eq('transferencia_id', transferenciaId)
+  const { error } = await supabase.from('transferencias').delete().eq('id', transferenciaId)
+  if (error) throw error
+}
+
 export async function confirmarRecebimentoTransferencia(transferenciaId, usuario) {
   const { data: transferencia, error: erroT } = await supabase.from('transferencias').select('*').eq('id', transferenciaId).single()
   if (erroT) throw erroT
