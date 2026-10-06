@@ -24,7 +24,7 @@ import HistoricoProduto from './pages/HistoricoProduto'
 import DiagnosticoPrato from './pages/DiagnosticoPrato'
 import Cardapio from './pages/Cardapio'
 import ConsolidadoSemanal from './pages/ConsolidadoSemanal'
-import FatoresCorrecao from './pages/FatoresCorrecao'
+import ArvoreDePorcionamento from './pages/ArvoreDePorcionamento'
 import Cobertura from './pages/Cobertura'
 import Backup from './pages/Backup'
 import Painel from './pages/Painel'
@@ -126,6 +126,7 @@ const MODULOS = [
       { id: 'base_produtos', label: 'Produtos', perm: 'cadastros.ver' },
       { id: 'base_lancamentos', label: 'Lançamentos', perm: 'contagens.ver' },
       { id: 'base_arvore', label: 'Árvore de transformação', perm: 'cadastros.ver' },
+      { id: 'base_arvore_porcionamento', label: 'Árvore de porcionamento', perm: 'cadastros.ver' },
       { id: 'base_hist_produto', label: 'Histórico do produto', perm: 'cadastros.ver' },
       { id: 'base_diagnostico', label: 'Diagnóstico de prato', perm: 'cadastros.ver' },
       { id: 'base_historico_ft', label: 'Histórico Ficha Técnica', perm: 'cadastros.ver' },
@@ -153,8 +154,7 @@ const MODULOS = [
     titulo: 'Standby',
     recolhivel: true,
     abas: [
-      { id: 'sb_consolidado', label: 'Consolidado da contagem (antigo)' },
-      { id: 'sb_fatores', label: 'Fatores de correção (antigo)' }
+      { id: 'sb_consolidado', label: 'Consolidado da contagem (antigo)' }
     ]
   }
 ]
@@ -305,6 +305,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
           {aba === 'base_produtos' && <BaseProdutos />}
           {aba === 'base_lancamentos' && <Lancamentos />}
           {aba === 'base_arvore' && <ArvoreTransformacao />}
+          {aba === 'base_arvore_porcionamento' && <ArvoreDePorcionamento />}
           {aba === 'base_hist_produto' && <HistoricoProduto />}
           {aba === 'base_diagnostico' && <DiagnosticoPrato />}
           {aba === 'base_historico_ft' && <HistoricoFichasTecnicas />}
@@ -324,7 +325,6 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
 
           {/* ── STANDBY ── */}
           {aba === 'sb_consolidado' && <ConsolidadoSemanal />}
-          {aba === 'sb_fatores' && <FatoresCorrecao />}
         </div>
       </div>
     </div>
