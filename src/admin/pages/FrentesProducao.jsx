@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
+import BuscaProdutoPerda from '../../components/BuscaProdutoPerda'
 import { listarFrentes } from '../../lib/frentesApi'
-import { listarSaldosCalculados } from '../../lib/estoqueMovimentosApi'
-import { listarProducoes, rendimentoDoEvento } from '../../lib/producaoApi'
-import { listarRequisicoesHistorico, listarTransferenciasHistorico } from '../../lib/requisicaoTransferenciaApi'
+import { listarSaldosCalculados, buscarHistoricoMovimentos } from '../../lib/estoqueMovimentosApi'
+import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../../lib/requisicaoTransferenciaApi'
 import { buscarProdutosPorCodigosEverest } from '../../lib/api'
 import { formatarNumero } from '../lib/formato'
 
@@ -10,6 +10,20 @@ import { formatarNumero } from '../lib/formato'
 // ver o que é lançado em Produção/Requisição/Transferência: cada tela nova (TelaProducao,
 // TelaRequisicao) só mostra o que está em aberto, nada fica visível depois de fechado. Esta tela
 // só LÊ — nenhuma edição acontece aqui.
+//
+// 06/10/2026 (pedido do Felipe): o histórico de movimentação é filtrado por ITEM — item + período
+// + frente, só então mostra — em vez de uma lista corrida (produções/requisições/transferências
+// dos últimos 50, sempre visível), que cresce sem parar e fica difícil de ler.
+
+const LABEL_TIPO = {
+  producao_entrada: 'Entrada (produção)',
+  producao_saida: 'Saída (produção)',
+  transferencia_saida: 'Transferência enviada',
+  transferencia_entrada: 'Transferência recebida',
+  requisicao_saida: 'Requisição atendida',
+  requisicao_entrada: 'Requisição recebida',
+  ajuste_contagem: 'Ajuste de contagem'
+}
 
 function fmt(n, casas = 3) {
   const x = Number(n)
@@ -19,15 +33,20 @@ function fmt(n, casas = 3) {
 
 function formatarDataHora(iso) {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
+
+function primeiroDiaMesAtual() {
+  const hoje = new Date()
+  return new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10)
+}
+function hojeIso() { return new Date().toISOString().slice(0, 10) }
 
 export default function FrentesProducao() {
   const [frentes, setFrentes] = useState([])
   const [saldosPorFrente, setSaldosPorFrente] = useState({})
-  const [producoes, setProducoes] = useState([])
-  const [requisicoes, setRequisicoes] = useState([])
-  const [transferencias, setTransferencias] = useState([])
+  const [pendentesReq, setPendentesReq] = useState([])
+  const [pendentesTransf, setPendentesTransf] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
 
@@ -52,14 +71,9 @@ export default function FrentesProducao() {
         })
         setSaldosPorFrente(mapa)
 
-        const [prod, req, transf] = await Promise.all([
-          listarProducoes({ limite: 50 }),
-          listarRequisicoesHistorico(50),
-          listarTransferenciasHistorico(50)
-        ])
-        setProducoes(prod)
-        setRequisicoes(req)
-        setTransferencias(transf)
+        const [pr, pt] = await Promise.all([listarRequisicoesPendentes(), listarTransferenciasPendentes()])
+        setPendentesReq(pr)
+        setPendentesTransf(pt)
       } catch (e) {
         setErro('Não consegui carregar — ' + e.message)
       } finally {
@@ -106,65 +120,137 @@ export default function FrentesProducao() {
         )}
       </div>
 
-      <div className="card" style={{ overflowX: 'auto' }}>
-        <p style={{ margin: '0 0 14px', fontWeight: 600, fontSize: 15 }}>Produções recentes</p>
-        {producoes.length === 0 ? <p className="muted">Nenhuma produção registrada ainda.</p> : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 560 }}>
+      <HistoricoMovimentacao frentes={frentes} />
+
+      <div className="card">
+        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Requisições pendentes</p>
+        {pendentesReq.length === 0 ? <p className="muted">Nada pendente.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {pendentesReq.map((r) => (
+              <div key={r.id} className="list-item">
+                <span>{r.solicitante?.nome} ← {r.atendente?.nome} · {fmt(r.quantidade_atendida || 0)}/{fmt(r.quantidade_solicitada)} {r.codigo_everest}</span>
+                <span className="muted">{r.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Transferências pendentes</p>
+        {pendentesTransf.length === 0 ? <p className="muted">Nada pendente.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {pendentesTransf.map((t) => (
+              <div key={t.id} className="list-item">
+                <span>{t.origem?.nome} → {t.destino?.nome} · {fmt(t.quantidade)} {t.codigo_everest}</span>
+                <span className="muted">{t.status}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function HistoricoMovimentacao({ frentes }) {
+  const [produto, setProduto] = useState(null)
+  const [frenteId, setFrenteId] = useState('')
+  const [dataInicio, setDataInicio] = useState(primeiroDiaMesAtual())
+  const [dataFim, setDataFim] = useState(hojeIso())
+  const [buscando, setBuscando] = useState(false)
+  const [erro, setErro] = useState('')
+  const [linhas, setLinhas] = useState(null) // null = ainda não buscou
+
+  const nomePorFrente = Object.fromEntries(frentes.map((f) => [f.id, f.nome]))
+
+  async function buscar() {
+    if (!produto) return
+    setBuscando(true)
+    setErro('')
+    try {
+      const movimentos = await buscarHistoricoMovimentos({ codigoEverest: produto.codigo_everest, frenteId: frenteId || undefined, dataFim })
+      // Saldo acumulado soma a HISTÓRIA TODA (até dataFim) — senão o acumulado mentiria, voltando
+      // a zero sempre que alguém filtra a partir de uma data no meio da vida do item.
+      let saldo = 0
+      const comSaldo = movimentos.map((m) => { saldo += Number(m.quantidade); return { ...m, saldoAcumulado: saldo } })
+      const inicioMs = dataInicio ? new Date(dataInicio + 'T00:00:00').getTime() : -Infinity
+      setLinhas(comSaldo.filter((m) => new Date(m.registrado_em).getTime() >= inicioMs).reverse())
+    } catch (e) {
+      setErro('Não consegui buscar — ' + e.message)
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Histórico de movimentação</p>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>Escolha o item e o período — a lista só aparece depois de buscar, pra não virar uma lista corrida.</p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {!produto ? (
+          <BuscaProdutoPerda onSelecionar={setProduto} />
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <p style={{ margin: 0, fontWeight: 500 }}>{produto.nome}</p>
+            <button type="button" className="ghost" onClick={() => { setProduto(null); setLinhas(null) }}>trocar</button>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: 1, minWidth: 140 }}>
+            <label className="muted">Frente</label>
+            <select value={frenteId} onChange={(e) => setFrenteId(e.target.value)}>
+              <option value="">Todas</option>
+              {frentes.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <label className="muted">De</label>
+            <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
+          </div>
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <label className="muted">Até</label>
+            <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
+          </div>
+          <button className="primary" onClick={buscar} disabled={!produto || buscando} style={{ height: 44 }}>
+            {buscando ? 'Buscando…' : 'Buscar'}
+          </button>
+        </div>
+      </div>
+
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 10 }}>{erro}</p>}
+
+      {linhas && (
+        linhas.length === 0 ? (
+          <p className="muted" style={{ marginTop: 14 }}>Nenhuma movimentação nesse período.</p>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 14 }}>
             <thead>
               <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                {['Data', 'Frente', 'Entrou', 'Saiu', 'F.C. do processo', 'Status'].map((h) => (
+                {['Data', 'Tipo', 'Frente', 'Quantidade', 'Saldo', 'Usuário'].map((h) => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {producoes.map((p) => {
-                const entradas = (p.producoes_itens || []).filter((i) => i.papel === 'entrada')
-                const saidas = (p.producoes_itens || []).filter((i) => i.papel === 'saida')
-                const r = rendimentoDoEvento(p)
-                return (
-                  <tr key={p.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{p.data}</td>
-                    <td style={{ padding: '8px' }}>{p.frentes?.nome || '—'}</td>
-                    <td style={{ padding: '8px' }}>{entradas.map((e) => `${fmt(e.quantidade)} ${e.unidade} ${e.produtos?.nome || e.codigo_everest}`).join(', ') || '—'}</td>
-                    <td style={{ padding: '8px' }}>{saidas.length ? `${saidas.length} ${saidas.length === 1 ? 'item' : 'itens'}` : '—'}</td>
-                    <td style={{ padding: '8px' }}>{r ? `${(r.aproveitamento * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%` : '—'}</td>
-                    <td style={{ padding: '8px' }} className="muted">{p.status}</td>
-                  </tr>
-                )
-              })}
+              {linhas.map((m) => (
+                <tr key={m.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                  <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{formatarDataHora(m.registrado_em)}</td>
+                  <td style={{ padding: '8px' }}>{LABEL_TIPO[m.tipo] || m.tipo}</td>
+                  <td style={{ padding: '8px' }}>{nomePorFrente[m.frente_id] || '—'}</td>
+                  <td style={{ padding: '8px', textAlign: 'right', fontWeight: 600, color: Number(m.quantidade) < 0 ? 'var(--danger)' : 'var(--success)' }}>
+                    {Number(m.quantidade) > 0 ? '+' : ''}{formatarNumero(m.quantidade, 3)}
+                  </td>
+                  <td style={{ padding: '8px', textAlign: 'right' }}>{formatarNumero(m.saldoAcumulado, 3)}</td>
+                  <td style={{ padding: '8px' }} className="muted">{m.usuario || '—'}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
-        )}
-      </div>
-
-      <div className="card">
-        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Requisições</p>
-        {requisicoes.length === 0 ? <p className="muted">Nenhuma ainda.</p> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {requisicoes.map((r) => (
-              <div key={r.id} className="list-item">
-                <span>{r.solicitante?.nome} ← {r.atendente?.nome} · {fmt(r.quantidade_atendida || 0)}/{fmt(r.quantidade_solicitada)} {r.codigo_everest}</span>
-                <span className="muted">{r.status} · {formatarDataHora(r.solicitado_em)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Transferências</p>
-        {transferencias.length === 0 ? <p className="muted">Nenhuma ainda.</p> : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {transferencias.map((t) => (
-              <div key={t.id} className="list-item">
-                <span>{t.origem?.nome} → {t.destino?.nome} · {fmt(t.quantidade)} {t.codigo_everest}</span>
-                <span className="muted">{t.status} · {formatarDataHora(t.enviado_em)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+        )
+      )}
     </div>
   )
 }

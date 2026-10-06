@@ -54,6 +54,10 @@ export async function criarRequisicao({ frenteSolicitanteId, frenteAtendenteId, 
 }
 
 // Atendimento parcial é normal: fecha com o que de fato foi enviado, sem travar a requisição.
+// Atender com MAIS do que foi pedido também é normal (ex.: arredondar pro tamanho da embalagem) —
+// pedido do Felipe (06/10/2026): "não aceitou com valor diferente do requisitado, nem maior nem
+// menor". Quem decide o quanto enviar é o estoquista que está atendendo (ver `podeAtenderRequisicao`
+// em src/lib/permissoes.js), não uma trava de quantidade.
 export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora, usuario }) {
   const { data: req, error: erroReq } = await supabase.from('requisicoes').select('*').eq('id', requisicaoId).single()
   if (erroReq) throw erroReq
@@ -61,9 +65,6 @@ export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora,
   if (!(qtd > 0)) throw new Error('Informe uma quantidade maior que zero.')
   const jaAtendido = Number(req.quantidade_atendida || 0)
   const totalAtendido = jaAtendido + qtd
-  if (totalAtendido > Number(req.quantidade_solicitada) + 0.001) {
-    throw new Error('Isso passa do que foi solicitado — confira a quantidade.')
-  }
   const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
 
   await registrarMovimento({

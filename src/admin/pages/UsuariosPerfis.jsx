@@ -62,6 +62,16 @@ const AREAS = [
       { id: 'usuarios.ver', label: 'Ver usuários e perfis' },
       { id: 'usuarios.editar', label: 'Criar e alterar usuários e perfis' }
     ]
+  },
+  {
+    // Pedido do Felipe (06/10/2026): atender requisição é liberar material de um estoque
+    // controlado (Central, Compras) — precisa ser restrito, diferente de transferência (que não
+    // tem gate, ver requisicaoTransferenciaApi.js). Checado via `podeAtenderRequisicao` (ver
+    // src/lib/permissoes.js), não pelo `podeVer` do Admin.
+    area: 'Requisição e transferência',
+    acoes: [
+      { id: 'requisicoes.atender', label: 'Atender requisição (liberar material)' }
+    ]
   }
 ]
 

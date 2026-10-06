@@ -29,6 +29,7 @@ import Cobertura from './pages/Cobertura'
 import Backup from './pages/Backup'
 import Painel from './pages/Painel'
 import FrentesProducao from './pages/FrentesProducao'
+import ConfiguracoesSistema from './pages/ConfiguracoesSistema'
 import ResumoDiario from './components/ResumoDiario'
 import AlertaFimDeMes from './components/AlertaFimDeMes'
 import Icon from './components/Icon'
@@ -142,6 +143,7 @@ const MODULOS = [
       // `Usuarios.jsx` antiga.
       { id: 'cfg_usuarios', label: 'Usuários', perm: 'usuarios.ver' },
       { id: 'cfg_migrar', label: 'Importar/migrar histórico', perm: 'importar.executar' },
+      { id: 'cfg_sistema', label: 'Configurações do sistema', perm: 'cadastros.editar' },
       { id: 'cfg_reset', label: 'Reset', perm: 'dev', perigo: true }
     ]
   },
@@ -314,6 +316,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
           {aba === 'cfg_siglas' && <Siglas />}
           {aba === 'cfg_usuarios' && <UsuariosPerfis usuarioLogado={usuario} />}
           {aba === 'cfg_migrar' && <ImportarHistorico />}
+          {aba === 'cfg_sistema' && <ConfiguracoesSistema usuario={usuario?.nome} />}
           {aba === 'cfg_reset' && <Reset />}
 
           {/* ── STANDBY ── */}

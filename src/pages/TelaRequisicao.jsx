@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import { listarFrentes } from '../lib/frentesApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
+import { podeAtenderRequisicao } from '../lib/permissoes'
 import {
   listarRequisicoesPendentes,
   listarRequisicoesHistorico,
@@ -87,7 +88,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
           {aba === 'pendentes' && (
             <Pendentes
               pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
-              usuario={usuarioLogado?.nome}
+              usuario={usuarioLogado?.nome} usuarioLogado={usuarioLogado}
               onMudou={carregar} onErro={setErro}
             />
           )}
@@ -208,10 +209,11 @@ function FormNova({ frentes, tipo, setTipo, usuario, onPronto, onErro }) {
   )
 }
 
-function Pendentes({ pendentesReq, pendentesTransf, usuario, onMudou, onErro }) {
+function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMudou, onErro }) {
   const [atendendoId, setAtendendoId] = useState(null)
   const [qtdAtender, setQtdAtender] = useState('')
   const [processando, setProcessando] = useState(false)
+  const podeAtender = podeAtenderRequisicao(usuarioLogado)
 
   async function atender(req) {
     setProcessando(true)
@@ -255,14 +257,16 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, onMudou, onErro }) 
                     {Number(r.quantidade_atendida || 0) > 0 && ` (já atendido ${fmt(r.quantidade_atendida)}, falta ${fmt(restante)})`}
                     {' '}— atender via <strong>{r.atendente?.nome}</strong>
                   </p>
-                  {atendendoId === r.id ? (
+                  {!podeAtender ? (
+                    <p className="muted" style={{ margin: 0, fontSize: 12 }}>Só estoquista, administrativo ou dev podem atender.</p>
+                  ) : atendendoId === r.id ? (
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <input type="number" min="0" step="0.001" placeholder={String(restante)} value={qtdAtender} onChange={(e) => setQtdAtender(e.target.value)} style={{ flex: 1 }} />
+                      <input type="number" min="0" step="0.001" value={qtdAtender} onChange={(e) => setQtdAtender(e.target.value)} style={{ flex: 1 }} />
                       <button className="primary" onClick={() => atender(r)} disabled={processando}>Confirmar</button>
                       <button className="ghost" onClick={() => { setAtendendoId(null); setQtdAtender('') }}>Cancelar</button>
                     </div>
                   ) : (
-                    <button className="primary" onClick={() => setAtendendoId(r.id)}>Atender</button>
+                    <button className="primary" onClick={() => { setAtendendoId(r.id); setQtdAtender(String(restante)) }}>Atender</button>
                   )}
                 </div>
               )

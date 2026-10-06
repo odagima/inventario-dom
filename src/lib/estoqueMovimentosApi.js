@@ -48,3 +48,20 @@ export async function listarSaldosCalculados(frenteId) {
   if (error) throw error
   return data || []
 }
+
+// Histórico de movimentação de UM item — pedido do Felipe (06/10/2026): "ter um histórico da
+// movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
+// (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra
+// a partir de uma data só corta o que é MOSTRADO depois, em `FrentesProducao.jsx`.
+export async function buscarHistoricoMovimentos({ codigoEverest, frenteId, dataFim }) {
+  let q = supabase
+    .from('estoque_movimentos')
+    .select('*')
+    .eq('codigo_everest', codigoEverest)
+    .order('registrado_em', { ascending: true })
+  if (frenteId) q = q.eq('frente_id', frenteId)
+  if (dataFim) q = q.lte('registrado_em', dataFim + 'T23:59:59')
+  const { data, error } = await q
+  if (error) throw error
+  return data || []
+}
