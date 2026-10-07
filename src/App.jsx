@@ -7,6 +7,7 @@ import TelaPerdas from './pages/TelaPerdas'
 import TelaProducao from './pages/TelaProducao'
 import TelaRequisicao from './pages/TelaRequisicao'
 import TelaOperacao from './pages/TelaOperacao'
+import TelaAcompanhamento from './pages/TelaAcompanhamento'
 import CadastroShell from './admin/CadastroShell'
 import AdminShell from './admin/AdminShell'
 import ProdutividadeShell from './produtividade/ProdutividadeShell'
@@ -51,7 +52,7 @@ function salvarUsuario(usuario) {
 
 export default function App() {
   const usuarioSalvo = lerUsuarioSalvo()
-  const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'contagem' | 'producao' | 'requisicao' | 'operacao' | 'produtividade' | 'cadastro' | 'admin'
+  const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'contagem' | 'producao' | 'requisicao' | 'operacao' | 'acompanhamento' | 'produtividade' | 'cadastro' | 'admin'
   const [contexto, setContexto] = useState(null) // { sessao, unidade, grupo } — unidade fica null na contagem semanal (sem loja)
   const [usuarioAtual, setUsuarioAtual] = useState(usuarioSalvo)
   // Perdas/Desperdícios ganhou botão próprio na Home (06/10/2026) — entra direto nesse tipo, sem
@@ -98,6 +99,7 @@ export default function App() {
   if (modo === 'producao') return <TelaProducao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'requisicao') return <TelaRequisicao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'operacao') return <TelaOperacao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
+  if (modo === 'acompanhamento') return <TelaAcompanhamento onSair={voltarPraHome} />
 
   if (modo === 'contagem') {
     if (!contexto) {
@@ -135,6 +137,7 @@ export default function App() {
       onEntrarProducao={() => setModo('producao')}
       onEntrarRequisicao={() => setModo('requisicao')}
       onEntrarOperacao={() => setModo('operacao')}
+      onEntrarAcompanhamento={() => setModo('acompanhamento')}
       onEntrarProdutividade={() => setModo('produtividade')}
       onAbrirCadastro={() => setModo('cadastro')}
       onAbrirAdmin={() => setModo('admin')}

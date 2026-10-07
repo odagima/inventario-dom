@@ -62,6 +62,18 @@ export async function removerMovimento(movimentoId) {
   if (error) throw error
 }
 
+// Atividade recente de TODOS os locais (painel de acompanhamento, 07/10/2026) — diferente do
+// histórico por item abaixo, que exige escolher um produto primeiro.
+export async function listarMovimentosRecentes(limite = 30) {
+  const { data, error } = await supabase
+    .from('estoque_movimentos')
+    .select('*')
+    .order('registrado_em', { ascending: false })
+    .limit(limite)
+  if (error) throw error
+  return data || []
+}
+
 // Histórico de movimentação de UM item — pedido do Felipe (06/10/2026): "ter um histórico da
 // movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
 // (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra

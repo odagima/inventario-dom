@@ -16,7 +16,8 @@ const CAMINHOS = {
   clock: 'M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0 M12 7v5l3 3',
   x: 'M18 6l-12 12 M6 6l12 12',
   'alert-triangle': 'M12 9v4 M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0 M12 16h.01',
-  check: 'M5 12l5 5l10 -10'
+  check: 'M5 12l5 5l10 -10',
+  activity: 'M3 12h4l3 8l4 -16l3 8h4'
 }
 
 export default function Icon({ nome, tamanho = 22, cor = 'currentColor', style }) {
