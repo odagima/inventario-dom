@@ -3,7 +3,7 @@ import Topbar from '../components/Topbar'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import Icon from '../components/Icon'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
-import { buscarTurnoAberto, turnoVencido, periodoDoTurno, LABEL_PERIODO, abrirTurno, fecharTurno, listarTurnosAbertos, listarTurnosHistorico } from '../lib/turnosApi'
+import { buscarTurnoAberto, turnoVencido, periodoDoTurno, LABEL_PERIODO, abrirTurno, fecharTurno } from '../lib/turnosApi'
 
 // Abrir/Fechar operação (07/10/2026, pedido do Felipe: "tipo caixa... abre, opera, precisa fechar
 // pra operar o próximo turno"). Botão próprio na Home, antes do menu de lançamentos — Produção e
@@ -13,87 +13,9 @@ import { buscarTurnoAberto, turnoVencido, periodoDoTurno, LABEL_PERIODO, abrirTu
 // Abrir = transferência de saída (de onde o material está vindo → o local da praça). Fechar =
 // transferência de volta (da praça → pra onde está indo, normalmente a câmara fria/Estoque
 // Central). As duas são a MESMA lista de itens (produto + quantidade), só muda a direção.
-//
-// "Status das praças" (07/10/2026, pedido do Felipe): "não quero no ADM, isso é pra a operação
-// verificar" — a central de acompanhamento mora aqui, na tela que o time já usa, não no
-// Administrativo. Atualiza sozinho, mostra todas as praças de uma vez antes de escolher uma.
-
-const INTERVALO_ATUALIZACAO_MS = 20000
 
 function hojeHora(iso) {
   return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function faz(iso) {
-  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
-  if (min < 1) return 'agora'
-  if (min < 60) return `há ${min} min`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `há ${h}h`
-  return `há ${Math.floor(h / 24)} dias`
-}
-
-function StatusPracas({ locais }) {
-  const [abertos, setAbertos] = useState([])
-  const [ultimoFechadoPorLocal, setUltimoFechadoPorLocal] = useState({})
-  const [carregando, setCarregando] = useState(true)
-
-  useEffect(() => {
-    let cancelado = false
-    async function carregar() {
-      try {
-        const ab = await listarTurnosAbertos()
-        if (cancelado) return
-        setAbertos(ab)
-
-        const idsComAberto = new Set(ab.map((t) => t.local_estoque_id))
-        const semAberto = locais.filter((l) => !idsComAberto.has(l.id))
-        const historicos = await Promise.all(semAberto.map((l) => listarTurnosHistorico(l.id, 1)))
-        if (cancelado) return
-        const mapa = {}
-        semAberto.forEach((l, i) => { mapa[l.id] = historicos[i][0] || null })
-        setUltimoFechadoPorLocal(mapa)
-      } catch { /* não trava o resto da tela por causa disso */ } finally {
-        if (!cancelado) setCarregando(false)
-      }
-    }
-    carregar()
-    const intervalo = setInterval(carregar, INTERVALO_ATUALIZACAO_MS)
-    return () => { cancelado = true; clearInterval(intervalo) }
-  }, [locais])
-
-  if (!locais.length) return null
-
-  const abertoPorLocal = Object.fromEntries(abertos.map((t) => [t.local_estoque_id, t]))
-
-  return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Status das praças</p>
-      {carregando ? <p className="muted">Carregando…</p> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {locais.map((l) => {
-            const turno = abertoPorLocal[l.id]
-            const vencido = turno && turnoVencido(turno)
-            const ultimoFechado = ultimoFechadoPorLocal[l.id]
-            return (
-              <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontWeight: 500 }}>{l.nome}</span>
-                {turno ? (
-                  <span style={{ fontSize: 12.5, textAlign: 'right', color: vencido ? 'var(--danger)' : 'var(--success)' }}>
-                    {vencido ? 'Vencida' : 'Aberta'} {faz(turno.aberto_em)}
-                  </span>
-                ) : ultimoFechado ? (
-                  <span className="muted" style={{ fontSize: 12.5, textAlign: 'right' }}>Fechada · {faz(ultimoFechado.fechado_em || ultimoFechado.aberto_em)}</span>
-                ) : (
-                  <span className="muted" style={{ fontSize: 12.5, textAlign: 'right' }}>Nunca aberta</span>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
 }
 
 function ListaItens({ itens, onMudar }) {
@@ -208,8 +130,6 @@ export default function TelaOperacao({ usuarioLogado, onSair }) {
   return (
     <div className="screen">
       <Topbar titulo="Operação" subtitulo="abrir e fechar por praça" onVoltar={onSair} />
-
-      <StatusPracas locais={locais} />
 
       <div className="card">
         <label className="muted">Praça / local de estoque</label>
