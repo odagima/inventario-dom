@@ -290,6 +290,25 @@ select option {
   box-shadow: 0 8px 28px rgba(28, 43, 68, 0.22);
 }
 
+/* Popup de tela cheia (07/10/2026, pedido do Felipe: "transformar todos os botões em popup" —
+   Contagem/Perdas/Produção/Requisição/Operação, que antes trocavam de página inteira ao abrir).
+   Diferente do `.modal-fundo` acima (caixa pequena centralizada, pro Recebimento e confirmações):
+   aqui o conteúdo é a própria tela (`.screen`, 100dvh), então vira uma camada cheia por cima da
+   Home — sem bordas arredondadas/blur, fecha só pelo "Voltar" de cada tela (nunca clicando fora:
+   são fluxos com estado, perder sem querer custa caro). Ver PopupTela.jsx. */
+.popup-tela {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--bg);
+  overflow-y: auto;
+  animation: popup-tela-entrar 0.16s ease;
+}
+@keyframes popup-tela-entrar {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .card {
   background: var(--surface);
   border: 0.5px solid var(--border);

@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react'
 import LoginScreen from './pages/LoginScreen'
 import HomeScreen from './pages/HomeScreen'
-import SelecaoUnidade from './pages/SelecaoUnidade'
-import TelaContagem from './pages/TelaContagem'
-import TelaPerdas from './pages/TelaPerdas'
-import TelaProducao from './pages/TelaProducao'
-import TelaRequisicao from './pages/TelaRequisicao'
-import TelaOperacao from './pages/TelaOperacao'
 import TelaAcompanhamento from './pages/TelaAcompanhamento'
 import CadastroShell from './admin/CadastroShell'
 import AdminShell from './admin/AdminShell'
@@ -16,8 +10,8 @@ import ProdutividadeShell from './produtividade/ProdutividadeShell'
 // `useState`, então qualquer F5 / troca de aba / retomada do PWA no celular jogava de volta pra tela
 // de login. Agora quem está logado fica guardado no navegador.
 //
-// O que é guardado: SÓ o usuário (nome/nível). A contagem em andamento (`contexto`) NÃO é
-// restaurada de propósito — voltar direto pra uma tela de contagem com uma sessão que pode ter sido
+// O que é guardado: SÓ o usuário (nome/nível). A contagem em andamento NÃO é restaurada de
+// propósito — voltar direto pra uma tela de contagem com uma sessão que pode ter sido
 // finalizada/alterada por outra pessoa nesse meio-tempo é pior do que passar pela Home e reabrir a
 // contagem, que é rápido e mostra o estado real. Depois do F5 o usuário cai na Home, logado.
 //
@@ -52,12 +46,12 @@ function salvarUsuario(usuario) {
 
 export default function App() {
   const usuarioSalvo = lerUsuarioSalvo()
-  const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'contagem' | 'producao' | 'requisicao' | 'operacao' | 'acompanhamento' | 'produtividade' | 'cadastro' | 'admin'
-  const [contexto, setContexto] = useState(null) // { sessao, unidade, grupo } — unidade fica null na contagem semanal (sem loja)
+  // 07/10/2026 (pedido do Felipe, "transformar todos os botões em popup"): Contagem, Perdas,
+  // Produção, Requisição e Operação saíram daqui — viraram camadas por cima da própria Home (ver
+  // HomeScreen.jsx/PopupTela.jsx), não trocam mais de `modo`. Só o que ficou de fora dessa troca
+  // (Admin, Acompanhamento, Cadastro, Produtividade) continua navegando de página cheia.
+  const [modo, setModo] = useState(usuarioSalvo ? 'home' : 'login') // 'login' | 'home' | 'acompanhamento' | 'produtividade' | 'cadastro' | 'admin'
   const [usuarioAtual, setUsuarioAtual] = useState(usuarioSalvo)
-  // Perdas/Desperdícios ganhou botão próprio na Home (06/10/2026) — entra direto nesse tipo, sem
-  // passar pela lista "o que você vai fazer" (ver SelecaoUnidade.jsx `tipoFixo`).
-  const [tipoFixoContagem, setTipoFixoContagem] = useState(null)
 
   // Renova a validade enquanto a pessoa está usando: quem passou o turno inteiro no app não é
   // deslogado no meio só porque entrou há 12h.
@@ -74,13 +68,10 @@ export default function App() {
   function sair() {
     salvarUsuario(null)
     setUsuarioAtual(null)
-    setContexto(null)
     setModo('login')
   }
 
   function voltarPraHome() {
-    setContexto(null)
-    setTipoFixoContagem(null)
     setModo('home')
   }
 
@@ -92,51 +83,11 @@ export default function App() {
   // de volta nele quando a pessoa não tem perfil vinculado (ninguém perde acesso na transição).
   if (modo === 'admin') return <AdminShell nivelAcesso={usuarioAtual?.nivelAcesso} usuario={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'produtividade') return <ProdutividadeShell usuarioLogado={usuarioAtual} onVoltar={voltarPraHome} />
-  // Produção não passa por SelecaoUnidade: o local de estoque é escolhido dentro da própria tela
-  // (não é "loja", é migration_v15.sql, renomeado de "frente" na migration_v19.sql) e não tem
-  // sessão por usuário — a lista de "em produção" é compartilhada por toda a cozinha, cada
-  // produção já carregando seu próprio local de estoque.
-  if (modo === 'producao') return <TelaProducao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
-  if (modo === 'requisicao') return <TelaRequisicao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
-  if (modo === 'operacao') return <TelaOperacao usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
   if (modo === 'acompanhamento') return <TelaAcompanhamento onSair={voltarPraHome} />
-
-  if (modo === 'contagem') {
-    if (!contexto) {
-      return <SelecaoUnidade usuarioLogado={usuarioAtual} tipoFixo={tipoFixoContagem} onSessaoPronta={setContexto} onVoltar={voltarPraHome} />
-    }
-    // Perdas tem tela própria (loop item → motivo → quantidade); ver src/pages/TelaPerdas.jsx.
-    if (contexto.sessao?.tipo === 'perdas') {
-      return (
-        <TelaPerdas
-          sessao={contexto.sessao}
-          unidade={contexto.unidade}
-          usuarioLogado={usuarioAtual}
-          onFinalizar={() => { setContexto(null); setModo('home') }}
-          onSair={() => { setContexto(null); setModo('home') }}
-        />
-      )
-    }
-    return (
-      <TelaContagem
-        sessao={contexto.sessao}
-        unidade={contexto.unidade}
-        grupo={contexto.grupo}
-        usuarioLogado={usuarioAtual}
-        onFinalizar={() => { setContexto(null); setModo('home') }}
-        onSair={() => { setContexto(null); setModo('home') }}
-      />
-    )
-  }
 
   return (
     <HomeScreen
       usuarioLogado={usuarioAtual}
-      onEntrarContagem={() => { setTipoFixoContagem(null); setModo('contagem') }}
-      onEntrarPerdas={() => { setTipoFixoContagem('perdas'); setModo('contagem') }}
-      onEntrarProducao={() => setModo('producao')}
-      onEntrarRequisicao={() => setModo('requisicao')}
-      onEntrarOperacao={() => setModo('operacao')}
       onEntrarAcompanhamento={() => setModo('acompanhamento')}
       onEntrarProdutividade={() => setModo('produtividade')}
       onAbrirCadastro={() => setModo('cadastro')}
