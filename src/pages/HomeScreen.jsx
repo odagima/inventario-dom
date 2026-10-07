@@ -2,7 +2,6 @@ import { useState } from 'react'
 import IconTile from '../components/IconTile'
 import Icon from '../components/Icon'
 import Modal from '../components/Modal'
-import PopupTela from '../components/PopupTela'
 import RecebimentoForm from '../components/RecebimentoForm'
 import SelecaoUnidade from './SelecaoUnidade'
 import TelaContagem from './TelaContagem'
@@ -25,9 +24,10 @@ import TelaOperacao from './TelaOperacao'
 //
 // 07/10/2026 (pedido do Felipe): "transformar todos os botões em popup" — Contagem, Perdas,
 // Produção, Requisição e Operação deixaram de navegar pra uma página própria (`App.jsx` não troca
-// mais de `modo` pra eles) e viraram uma camada em cima da própria Home (ver PopupTela.jsx). Ficou
-// de fora Admin, Acompanhamento e Cadastro — "vamos mudar muita coisa, está sem graça": são telas
-// de consulta/gestão, não lançamento rápido, e continuam navegação de página cheia mesmo.
+// mais de `modo` pra eles) e abrem no MESMO popup pequeno do Recebimento de Mercadoria ("igual ao
+// recebimento de mercadoria" — 1ª versão tinha feito uma camada de tela cheia separada, trocado
+// por pedido dele). Ficou de fora Admin, Acompanhamento e Cadastro — "vamos mudar muita coisa,
+// está sem graça": são telas de consulta/gestão, não lançamento rápido, continuam página cheia.
 export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEntrarAcompanhamento, onAbrirCadastro, onAbrirAdmin, onSair }) {
   const nivel = usuarioLogado.nivelAcesso
   const podeCadastro = nivel === 'administrativo' || nivel === 'estoque_compras'
@@ -117,17 +117,23 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
       )}
 
       {telaAberta === 'producao' && (
-        <PopupTela><TelaProducao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} /></PopupTela>
+        <Modal onFechar={() => setTelaAberta(null)} largura={440}>
+          <TelaProducao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} />
+        </Modal>
       )}
       {telaAberta === 'requisicao' && (
-        <PopupTela><TelaRequisicao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} /></PopupTela>
+        <Modal onFechar={() => setTelaAberta(null)} largura={440}>
+          <TelaRequisicao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} />
+        </Modal>
       )}
       {telaAberta === 'operacao' && (
-        <PopupTela><TelaOperacao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} /></PopupTela>
+        <Modal onFechar={() => setTelaAberta(null)} largura={440}>
+          <TelaOperacao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} />
+        </Modal>
       )}
 
       {contagemAberta && (
-        <PopupTela>
+        <Modal onFechar={fecharContagem} largura={440}>
           {!contexto ? (
             <SelecaoUnidade usuarioLogado={usuarioLogado} tipoFixo={tipoFixoContagem} onSessaoPronta={setContexto} onVoltar={fecharContagem} />
           ) : contexto.sessao?.tipo === 'perdas' ? (
@@ -135,7 +141,7 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
           ) : (
             <TelaContagem sessao={contexto.sessao} unidade={contexto.unidade} grupo={contexto.grupo} usuarioLogado={usuarioLogado} onFinalizar={fecharContagem} onSair={fecharContagem} />
           )}
-        </PopupTela>
+        </Modal>
       )}
     </div>
   )

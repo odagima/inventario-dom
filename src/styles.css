@@ -287,26 +287,20 @@ select option {
   border-radius: 20px;
   padding: 18px;
   width: 100%;
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
   box-shadow: 0 8px 28px rgba(28, 43, 68, 0.22);
 }
 
-/* Popup de tela cheia (07/10/2026, pedido do Felipe: "transformar todos os botões em popup" —
-   Contagem/Perdas/Produção/Requisição/Operação, que antes trocavam de página inteira ao abrir).
-   Diferente do `.modal-fundo` acima (caixa pequena centralizada, pro Recebimento e confirmações):
-   aqui o conteúdo é a própria tela (`.screen`, 100dvh), então vira uma camada cheia por cima da
-   Home — sem bordas arredondadas/blur, fecha só pelo "Voltar" de cada tela (nunca clicando fora:
-   são fluxos com estado, perder sem querer custa caro). Ver PopupTela.jsx. */
-.popup-tela {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
-  background: var(--bg);
-  overflow-y: auto;
-  animation: popup-tela-entrar 0.16s ease;
-}
-@keyframes popup-tela-entrar {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+/* 07/10/2026 (pedido do Felipe: "igual ao recebimento de mercadoria" — Contagem/Perdas/Produção/
+   Requisição/Operação, que viviam numa página própria, agora abrem dentro do MESMO popup pequeno
+   do Recebimento, não numa camada de tela cheia). Essas telas são `.screen` por dentro (pensadas
+   pra ocupar a página inteira, `min-height: 100dvh`) — dentro do popup isso faria a caixa crescer
+   além do viewport. Zera o `min-height`/padding só quando `.screen` está dentro do popup (o
+   `.modal-caixa` acima já dá o respiro e o scroll, se o conteúdo for mais alto que a tela). */
+.modal-caixa .screen {
+  min-height: 0;
+  padding: 0;
 }
 
 .card {
