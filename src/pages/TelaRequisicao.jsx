@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
 import Icon from '../components/Icon'
+import Modal from '../components/Modal'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
@@ -29,7 +30,8 @@ function fmt(n, casas = 3) {
 }
 
 export default function TelaRequisicao({ usuarioLogado, onSair }) {
-  const [aba, setAba] = useState('nova') // 'nova' | 'pendentes' | 'historico'
+  const [aba, setAba] = useState('pendentes') // 'pendentes' | 'historico'
+  const [modalNova, setModalNova] = useState(false) // popup, não troca de aba
   const [tipo, setTipo] = useState('requisicao') // 'requisicao' | 'transferencia'
   const [locais, setLocais] = useState([])
   const [pendentesReq, setPendentesReq] = useState([])
@@ -62,8 +64,11 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
 
+      <button className="primary" onClick={() => setModalNova(true)} style={{ width: '100%', padding: 16, fontSize: 16, marginBottom: 14 }}>
+        + Nova requisição/transferência
+      </button>
+
       <div className="segmented" style={{ marginBottom: 14 }}>
-        <button onClick={() => setAba('nova')} className={aba === 'nova' ? 'active' : ''}>Nova</button>
         <button onClick={() => setAba('pendentes')} className={aba === 'pendentes' ? 'active' : ''}>
           Pendentes{(pendentesReq.length + pendentesTransf.length) > 0 ? ` (${pendentesReq.length + pendentesTransf.length})` : ''}
         </button>
@@ -72,14 +77,6 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
 
       {carregando ? <p className="muted">Carregando…</p> : (
         <>
-          {aba === 'nova' && (
-            <FormNova
-              locais={locais} tipo={tipo} setTipo={setTipo}
-              usuario={usuarioLogado?.nome}
-              onPronto={carregar} onErro={setErro}
-            />
-          )}
-
           {aba === 'pendentes' && (
             <Pendentes
               pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
@@ -93,11 +90,25 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
           )}
         </>
       )}
+
+      {modalNova && (
+        <Modal onFechar={() => setModalNova(false)} largura={420}>
+          {/* Não fecha sozinho ao enviar — fica aberto pra lançar vários seguidos (já era assim
+              quando "Nova" era uma aba fixa), só atualiza pendentes/histórico por baixo. Fecha com
+              ESC, clicando fora, ou o "Fechar" do próprio formulário. */}
+          <FormNova
+            locais={locais} tipo={tipo} setTipo={setTipo}
+            usuario={usuarioLogado?.nome}
+            onPronto={carregar}
+            onFechar={() => setModalNova(false)}
+          />
+        </Modal>
+      )}
     </div>
   )
 }
 
-function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
+function FormNova({ locais, tipo, setTipo, usuario, onPronto, onFechar }) {
   const [origemId, setOrigemId] = useState('')
   const [destinoId, setDestinoId] = useState('')
   const [produto, setProduto] = useState(null)
@@ -105,6 +116,7 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
   const [disponivel, setDisponivel] = useState(null)
   const [salvando, setSalvando] = useState(false)
   const [msg, setMsg] = useState('')
+  const [erro, setErro] = useState('')
 
   const qtd = Number(String(quantidade).replace(',', '.'))
 
@@ -122,6 +134,7 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
   async function enviar() {
     setSalvando(true)
     setMsg('')
+    setErro('')
     try {
       const localQuemAge = tipo === 'requisicao' ? destinoId : origemId
       const turno = await turnoUtilizavel(localQuemAge)
@@ -142,14 +155,18 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
       setQuantidade('')
       onPronto()
     } catch (e) {
-      onErro('Não consegui enviar — ' + e.message)
+      setErro('Não consegui enviar — ' + e.message)
     } finally {
       setSalvando(false)
     }
   }
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Nova</p>
+        <button type="button" className="ghost" onClick={onFechar}>Fechar</button>
+      </div>
       <div className="segmented">
         <button onClick={() => setTipo('requisicao')} className={tipo === 'requisicao' ? 'active' : ''}>Requisição</button>
         <button onClick={() => setTipo('transferencia')} className={tipo === 'transferencia' ? 'active' : ''}>Transferência</button>
@@ -194,6 +211,7 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
       )}
 
       {msg && <p style={{ fontSize: 13, color: 'var(--success)' }}>{msg}</p>}
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erro}</p>}
 
       <button
         className="primary"

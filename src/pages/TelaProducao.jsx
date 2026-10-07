@@ -68,7 +68,8 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
   const [planejadas, setPlanejadas] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
-  const [tela, setTela] = useState('painel') // 'painel' | 'abrir' | 'processo' | 'planejar'
+  const [tela, setTela] = useState('painel') // 'painel' | 'processo'
+  const [modal, setModal] = useState(null) // null | 'abrir' | 'planejar' — popup sobre o painel, não troca de tela
   const [processoRaizId, setProcessoRaizId] = useState(null)
   const [prefill, setPrefill] = useState(null) // { localEstoqueId, planejadaId, metaCodigoEverest, metaQuantidade } — só pra "Iniciar" numa planejada
 
@@ -94,7 +95,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
   function iniciarPlanejada(p) {
     setPrefill({ localEstoqueId: p.local_estoque_id, planejadaId: p.id, metaCodigoEverest: p.meta_codigo_everest, metaQuantidade: p.meta_quantidade })
-    setTela('abrir')
+    setModal('abrir')
   }
 
   async function cancelarPlanejada(p) {
@@ -110,8 +111,8 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
     <div className="screen">
       <Topbar
         titulo="Produção"
-        subtitulo={tela === 'painel' ? 'o que está sendo produzido' : tela === 'abrir' ? 'nova produção' : tela === 'planejar' ? 'planejar o que falta produzir' : 'acompanhar a produção'}
-        onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); setPrefill(null); carregar() }}
+        subtitulo={tela === 'painel' ? 'o que está sendo produzido' : 'acompanhar a produção'}
+        onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); carregar() }}
       />
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
@@ -119,10 +120,10 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
       {tela === 'painel' && (
         <>
           <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-            <button className="primary" onClick={() => { setPrefill(null); setTela('abrir') }} style={{ flex: 1, padding: 16, fontSize: 16 }}>
+            <button className="primary" onClick={() => { setPrefill(null); setModal('abrir') }} style={{ flex: 1, padding: 16, fontSize: 16 }}>
               Iniciar produção
             </button>
-            <button onClick={() => setTela('planejar')} style={{ padding: 16, fontSize: 16 }}>
+            <button onClick={() => setModal('planejar')} style={{ padding: 16, fontSize: 16 }}>
               + Planejar
             </button>
           </div>
@@ -196,21 +197,23 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
         </>
       )}
 
-      {tela === 'planejar' && (
-        <FormPlanejar
-          usuario={usuarioLogado?.nome}
-          onPronto={async () => { await carregar(); setTela('painel') }}
-          onErro={setErro}
-        />
+      {modal === 'planejar' && (
+        <Modal onFechar={() => setModal(null)} largura={420}>
+          <FormPlanejar
+            usuario={usuarioLogado?.nome}
+            onPronto={async () => { await carregar(); setModal(null) }}
+          />
+        </Modal>
       )}
 
-      {tela === 'abrir' && (
-        <FormAbrir
-          usuario={usuarioLogado?.nome}
-          prefill={prefill}
-          onPronto={async () => { await carregar(); setTela('painel'); setPrefill(null) }}
-          onErro={setErro}
-        />
+      {modal === 'abrir' && (
+        <Modal onFechar={() => { setModal(null); setPrefill(null) }} largura={420}>
+          <FormAbrir
+            usuario={usuarioLogado?.nome}
+            prefill={prefill}
+            onPronto={async () => { await carregar(); setModal(null); setPrefill(null) }}
+          />
+        </Modal>
       )}
 
       {tela === 'processo' && processoRaizId && (
@@ -225,7 +228,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 }
 
 // ── Planejar: só registra "o que falta produzir" (meta), sem pesar nada ainda ─────────────────
-function FormPlanejar({ usuario, onPronto, onErro }) {
+function FormPlanejar({ usuario, onPronto }) {
   const [locais, setLocais] = useState([])
   const [localEstoqueId, setLocalEstoqueId] = useState('')
   const [categoria, setCategoria] = useState(CATEGORIAS[1])
@@ -233,8 +236,9 @@ function FormPlanejar({ usuario, onPronto, onErro }) {
   const [quantidade, setQuantidade] = useState('')
   const [observacao, setObservacao] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
 
-  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
+  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => setErro(e.message)) }, [])
 
   async function salvar() {
     setSalvando(true)
@@ -246,14 +250,15 @@ function FormPlanejar({ usuario, onPronto, onErro }) {
       })
       onPronto()
     } catch (e) {
-      onErro('Não consegui planejar — ' + e.message)
+      setErro('Não consegui planejar — ' + e.message)
     } finally {
       setSalvando(false)
     }
   }
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Planejar produção</p>
       <div>
         <label className="muted">Local de estoque</label>
         <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
@@ -292,12 +297,13 @@ function FormPlanejar({ usuario, onPronto, onErro }) {
           </button>
         </>
       )}
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erro}</p>}
     </div>
   )
 }
 
 // ── Abrir: a entrada ("o que eu peguei") + o local de estoque ────────────────────────────────
-function FormAbrir({ usuario, prefill, onPronto, onErro }) {
+function FormAbrir({ usuario, prefill, onPronto }) {
   const [data, setData] = useState(hojeIso())
   const [locais, setLocais] = useState([])
   const [localEstoqueId, setLocalEstoqueId] = useState(prefill?.localEstoqueId || '')
@@ -305,8 +311,9 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
   const [salvando, setSalvando] = useState(false)
+  const [erro, setErro] = useState('')
 
-  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
+  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => setErro(e.message)) }, [])
 
   const qtd = Number(String(quantidade).replace(',', '.'))
 
@@ -329,14 +336,15 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
       }
       onPronto()
     } catch (e) {
-      onErro('Não consegui abrir — ' + e.message)
+      setErro('Não consegui abrir — ' + e.message)
     } finally {
       setSalvando(false)
     }
   }
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>{prefill?.planejadaId ? 'Iniciar planejada' : 'Nova produção'}</p>
       {prefill?.planejadaId && (
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
           Planejado: {prefill.metaQuantidade ? `${fmt(prefill.metaQuantidade)} ` : ''}{prefill.metaCodigoEverest}. Confirme o produto e pese o bruto de verdade.
@@ -394,6 +402,7 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
           </button>
         </>
       )}
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erro}</p>}
     </div>
   )
 }
