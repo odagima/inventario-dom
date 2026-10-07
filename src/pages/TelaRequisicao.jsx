@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
+import Icon from '../components/Icon'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
@@ -167,7 +168,7 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
             {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
           </select>
         </div>
-        <button type="button" className="ghost" onClick={inverter} title="Inverter" style={{ flexShrink: 0 }}>⇄</button>
+        <button type="button" className="ghost" onClick={inverter} title="Inverter" style={{ flexShrink: 0 }}><Icon nome="arrows-exchange" tamanho={18} /></button>
         <div style={{ flex: 1 }}>
           <label className="muted">Para (destino)</label>
           <select value={destinoId} onChange={(e) => setDestinoId(e.target.value)}>

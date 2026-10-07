@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx'
 import { listarGruposAdmin, listarDatasContagemPorGrupo, buscarCMVSemanal, buscarContagensDoProduto, buscarVendasDoProduto } from '../lib/adminApi'
 import { ultimoTrecho, formatarMoeda } from '../lib/formato'
 import { useEscParaFechar } from '../lib/hooks'
+import Icon from '../components/Icon'
 import ArvoreDeOrigemView from '../components/ArvoreDeOrigemView'
 import { LABEL_MOTIVO_PERDA } from '../../lib/perdas'
 
@@ -184,7 +185,7 @@ function DetalheCMV({ item, dados, abaDetalhe, setAbaDetalhe, setDrill, onFechar
           <button onClick={() => exportarMemoriaCalculo(item, dados)} style={{ padding: '4px 10px', fontSize: 11.5 }}>
             Exportar memória de cálculo
           </button>
-          {onFechar && <button onClick={onFechar} style={{ background: 'none', border: 'none', fontSize: 18 }}>×</button>}
+          {onFechar && <button onClick={onFechar} style={{ background: 'none', border: 'none' }}><Icon nome="x" tamanho={18} /></button>}
         </div>
       </div>
       <p className="muted" style={{ margin: '4px 0 14px', fontSize: 12 }}>
@@ -1536,7 +1537,7 @@ export default function CMVSemanal() {
                       : 'Como esse item se transforma até o insumo em natura'}
                 </p>
               </div>
-              <button onClick={() => setDrill(null)} style={{ background: 'none', border: 'none', fontSize: 18 }}>×</button>
+              <button onClick={() => setDrill(null)} style={{ background: 'none', border: 'none' }}><Icon nome="x" tamanho={18} /></button>
             </div>
             <div style={{ marginTop: 12 }}>
               {drill.modo === 'vendas' ? (

@@ -11,6 +11,7 @@ import {
 } from '../lib/api'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
+import Icon from '../components/Icon'
 
 // Contagem semanal não pede loja (Compras não separa por loja no Everest, e a Contagem Semanal
 // já é filtrada por Grupo de contagem). 28/08/2026: perdas também não — é lançamento de cozinha,
@@ -259,7 +260,7 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
           {itensRevisao.map((p) => (
             <div key={p.id} className="list-item">
               <span>{p.nome}</span>
-              <button onClick={() => handleRemoverItemRevisao(p.id)} style={{ fontSize: 16, color: 'var(--danger)', background: 'none', border: 'none' }}>×</button>
+              <button onClick={() => handleRemoverItemRevisao(p.id)} style={{ color: 'var(--danger)', background: 'none', border: 'none' }}><Icon nome="x" tamanho={16} /></button>
             </div>
           ))}
         </div>

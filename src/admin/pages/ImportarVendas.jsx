@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { importarVendasEverest, buscarResumoVendasPorAnoMes, buscarDetalheVendasDoMes } from '../lib/adminApi'
 import { formatarMoeda } from '../lib/formato'
+import Icon from '../components/Icon'
 
 const NOMES_MES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 
@@ -29,7 +30,7 @@ function PopupDetalheMes({ ano, mes, onClose }) {
       <div className="card" style={{ maxWidth: 480, width: '100%', maxHeight: '80vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>{NOMES_MES[Number(mes) - 1]}/{ano} — por dia e loja</p>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18 }}>×</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none' }}><Icon nome="x" tamanho={18} /></button>
         </div>
         {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 10 }}>{erro}</p>}
         {!erro && !linhas && <p className="muted" style={{ marginTop: 10 }}>Carregando…</p>}

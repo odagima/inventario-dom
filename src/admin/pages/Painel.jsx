@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { buscarPainelResumo, buscarTendenciaPainel, buscarCurvaDeVendas, buscarFaturamentoDiario, corFarolCmv } from '../lib/adminApi'
 import { formatarMoeda, formatarNumero, formatarPercentual } from '../lib/formato'
+import Icon from '../components/Icon'
 
 function primeiroDiaMesAtual() {
   const hoje = new Date()
@@ -100,7 +101,7 @@ function PopupFaturamento({ d, share, onClose }) {
       <div className="card" style={{ maxWidth: 420, width: '100%', maxHeight: '80vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Faturamento</p>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18 }}>×</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none' }}><Icon nome="x" tamanho={18} /></button>
         </div>
         <p className="muted" style={{ margin: '4px 0 14px' }}>Total do período: {formatarMoeda(d.faturamento.total)}</p>
         {[
@@ -164,7 +165,7 @@ function PopupCmvReal({ d, onClose }) {
       <div className="card" style={{ maxWidth: 640, width: '100%', maxHeight: '80vh', overflowY: 'auto', overflowX: 'auto' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>CMV Real</p>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18 }}>×</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none' }}><Icon nome="x" tamanho={18} /></button>
         </div>
         <p className="muted" style={{ margin: '4px 0 14px', fontSize: 12 }}>
           Estoque inicial + Compras − Estoque final = Consumo. Compras só existe nos blocos DOM/Dalva (nota fiscal

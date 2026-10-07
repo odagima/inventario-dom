@@ -6,6 +6,7 @@ import ScannerCodigoBarras from '../components/ScannerCodigoBarras'
 import ConversaoQuantidade from '../components/ConversaoQuantidade'
 import VincularProduto from '../components/VincularProduto'
 import CadastroRapido from '../components/CadastroRapido'
+import Icon from '../components/Icon'
 import {
   buscarProdutoPorBarcode,
   cadastrarProdutoComBarcode,
@@ -252,7 +253,7 @@ export default function TelaContagem({ sessao, unidade, grupo, onFinalizar, onSa
     return (
       <div className="screen">
         <div className="card" style={{ textAlign: 'center', marginBottom: 16 }}>
-          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(63,125,74,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px', fontSize: 22, color: 'var(--success)' }}>✓</div>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(63,125,74,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px', color: 'var(--success)' }}><Icon nome="check" tamanho={24} /></div>
           <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Contagem enviada</p>
           <p className="muted" style={{ margin: '4px 0 0' }}>{nomeContexto} · {itens.length} {itens.length === 1 ? 'item' : 'itens'}</p>
         </div>
@@ -389,7 +390,7 @@ export default function TelaContagem({ sessao, unidade, grupo, onFinalizar, onSa
                             {p.nome} <span style={{ fontSize: 11, color: 'var(--accent)' }}>· grupo</span>
                           </span>
                           {lancado
-                            ? <span style={{ color: 'var(--success)', flexShrink: 0 }}>{formatarQtd(lancado.quantidade, p.unidade_medida)} {p.unidade_medida} ✓</span>
+                            ? <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--success)', flexShrink: 0 }}>{formatarQtd(lancado.quantidade, p.unidade_medida)} {p.unidade_medida} <Icon nome="check" tamanho={13} /></span>
                             : <span className="muted" style={{ flexShrink: 0 }}>{p.unidade_medida}</span>}
                         </button>
                       )

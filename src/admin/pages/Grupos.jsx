@@ -10,6 +10,7 @@ import {
   removerItemGrupo,
   buscarProdutosAdmin
 } from '../lib/adminApi'
+import Icon from '../components/Icon'
 
 export default function Grupos() {
   const [grupos, setGrupos] = useState([])
@@ -155,7 +156,7 @@ export default function Grupos() {
           itensGrupo.map((p) => (
             <div key={p.id} className="list-item">
               <span>{p.nome}</span>
-              <button onClick={() => handleRemoverItem(p.id)} style={{ fontSize: 16, background: 'none', border: 'none', color: 'var(--danger)' }}>×</button>
+              <button onClick={() => handleRemoverItem(p.id)} style={{ background: 'none', border: 'none', color: 'var(--danger)' }}><Icon nome="x" tamanho={16} /></button>
             </div>
           ))
         )}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { buscarProdutosParaFator, listarFatoresCorrecao, criarFatorCorrecao, removerFatorCorrecao } from '../lib/adminApi'
+import Icon from '../components/Icon'
 
 // Porcionamento (06/10/2026, pedido do Felipe): "pegar todos os itens que existe um porcionamento,
 // e ter isso como base... deixar disponível pra alteração, incluir ou excluir qualquer item que
@@ -34,7 +35,7 @@ function ProdutoPicker({ label, selecionado, onSelecionar, placeholder }) {
         <label className="muted">{label}</label>
         <div className="list-item" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
           <span>{selecionado.nome} <span className="muted" style={{ fontSize: 11 }}>· {selecionado.codigo_everest} · {selecionado.unidade_medida}</span></span>
-          <button onClick={() => { onSelecionar(null); setTermo(''); setResultados([]) }} style={{ background: 'none', border: 'none', color: 'var(--danger)', fontSize: 16 }}>×</button>
+          <button onClick={() => { onSelecionar(null); setTermo(''); setResultados([]) }} style={{ background: 'none', border: 'none', color: 'var(--danger)' }}><Icon nome="x" tamanho={16} /></button>
         </div>
       </div>
     )

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import Topbar from '../components/Topbar'
 import Modal from '../components/Modal'
+import Icon from '../components/Icon'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarFatoresCorrecao, calcularFCTeorico, filhosDiretos, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
@@ -146,7 +147,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
                       </p>
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                      <button className="ghost" onClick={() => cancelarPlanejada(p)} aria-label="Cancelar planejamento" style={{ padding: '10px 12px', color: 'var(--danger)' }}>×</button>
+                      <button className="ghost" onClick={() => cancelarPlanejada(p)} aria-label="Cancelar planejamento" style={{ padding: '10px 12px', color: 'var(--danger)' }}><Icon nome="x" tamanho={16} /></button>
                       <button className="primary" onClick={() => iniciarPlanejada(p)}>Iniciar</button>
                     </div>
                   </div>
@@ -699,7 +700,7 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
                             onClick={async () => { await removerItemProducao(s.id); await onMudou() }}
                             style={{ padding: '8px 10px', color: 'var(--danger)' }}
                             aria-label="Apagar"
-                          >×</button>
+                          ><Icon nome="x" tamanho={16} /></button>
                         </>
                       )}
                     </span>

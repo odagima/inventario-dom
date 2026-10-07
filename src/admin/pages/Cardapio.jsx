@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { buscarMargemCardapio, buscarComposicaoFicha, buscarFichasQueUsamInsumo } from '../lib/adminApi'
+import Icon from '../components/Icon'
 
 const NOMES_MES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const fmtRS = (n) => n == null ? '—' : 'R$ ' + Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -190,7 +191,7 @@ export default function Cardapio() {
           <div className="card" style={{ maxWidth: 460, width: '100%', maxHeight: '80vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>{popup.nome}</p>
-              <button onClick={() => setPopup(null)} style={{ background: 'none', border: 'none', fontSize: 18 }}>×</button>
+              <button onClick={() => setPopup(null)} style={{ background: 'none', border: 'none' }}><Icon nome="x" tamanho={18} /></button>
             </div>
             <p className="muted" style={{ margin: '4px 0 12px' }}>
               Custo {fmtRS(popup.custo)} · Venda {fmtRS(popup.venda)} · CMV {fmtPct(popup.cmv)}

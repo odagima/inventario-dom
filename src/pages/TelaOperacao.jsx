@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import Topbar from '../components/Topbar'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
+import Icon from '../components/Icon'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarTurnoAberto, turnoVencido, periodoDoTurno, LABEL_PERIODO, abrirTurno, fecharTurno } from '../lib/turnosApi'
 
@@ -38,7 +39,7 @@ function ListaItens({ itens, onMudar }) {
       {itens.map((it, i) => (
         <div key={i} className="list-item">
           <span>{it.nome} <span className="muted" style={{ fontSize: 11 }}>· {it.quantidade} {it.unidade}</span></span>
-          <button onClick={() => remover(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)', fontSize: 16 }}>×</button>
+          <button onClick={() => remover(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)' }}><Icon nome="x" tamanho={16} /></button>
         </div>
       ))}
 

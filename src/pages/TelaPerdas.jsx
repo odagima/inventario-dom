@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import Topbar from '../components/Topbar'
 import Modal from '../components/Modal'
+import Icon from '../components/Icon'
 import { MOTIVOS_PERDA, CATEGORIAS_PERDA, LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../lib/perdas'
 import {
   registrarItemContagem,
@@ -24,6 +25,10 @@ import {
 // caminho paralelo deixou de existir.
 
 const INTERVALO_ATUALIZACAO_MS = 20000
+
+// Pedido do Felipe (07/10/2026): a tela de motivo ficava "mega vazia" com só texto — ganhou ícone
+// pra preencher melhor e ficar consistente com o resto do app.
+const ICONE_MOTIVO = { estragado: 'alert-triangle', sobra_praca: 'trash', erro_preparo: 'chef-hat' }
 
 function formatarQtd(qtd, unidade) {
   const u = (unidade || '').toUpperCase()
@@ -192,7 +197,7 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
     return (
       <div className="screen">
         <div className="card" style={{ textAlign: 'center', marginBottom: 16 }}>
-          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(63,125,74,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px', fontSize: 22, color: 'var(--success)' }}>✓</div>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(63,125,74,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px', color: 'var(--success)' }}><Icon nome="check" tamanho={24} /></div>
           <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Registro enviado</p>
           <p className="muted" style={{ margin: '4px 0 0' }}>{contexto} · {itens.length} {itens.length === 1 ? 'lançamento' : 'lançamentos'}</p>
         </div>
@@ -328,10 +333,15 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
             <button
               key={m.valor}
               onClick={() => handleEscolherMotivo(m.valor)}
-              style={{ textAlign: 'left', padding: '14px', background: 'var(--surface-2)', minHeight: 58 }}
+              style={{ display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left', padding: '16px', background: 'var(--surface-2)', minHeight: 76 }}
             >
-              <span style={{ display: 'block', fontWeight: 600 }}>{m.label}</span>
-              <span className="muted" style={{ fontSize: 12 }}>{m.descricao}</span>
+              <div style={{ width: 46, height: 46, borderRadius: 12, background: 'var(--surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon nome={ICONE_MOTIVO[m.valor]} tamanho={23} cor="var(--danger)" />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <span style={{ display: 'block', fontWeight: 600 }}>{m.label}</span>
+                <span className="muted" style={{ fontSize: 12 }}>{m.descricao}</span>
+              </div>
             </button>
           ))}
         </div>
@@ -455,8 +465,8 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
                       {formatarQtd(item.quantidade, item.modo_perda === 'prato' ? 'un' : item.produtos?.unidade_medida)}{' '}
                       {item.modo_perda === 'prato' ? 'porções' : item.produtos?.unidade_medida}
                     </span>
-                    <button onClick={() => handleRemoverItem(item.id)} style={{ padding: '9px 11px', fontSize: 16, color: 'var(--danger)' }} aria-label="Apagar lançamento">
-                      ×
+                    <button onClick={() => handleRemoverItem(item.id)} style={{ padding: '9px 11px', color: 'var(--danger)' }} aria-label="Apagar lançamento">
+                      <Icon nome="x" tamanho={16} />
                     </button>
                   </div>
                 </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Html5Qrcode } from 'html5-qrcode'
+import Icon from './Icon'
 
 const FORMATOS_NATIVOS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf']
 const FORMATOS_FALLBACK = ['EAN_13', 'EAN_8', 'UPC_A', 'UPC_E', 'CODE_128', 'CODE_39', 'ITF']
@@ -188,11 +189,11 @@ export default function ScannerCodigoBarras({ onLeitura, ativo }) {
           <div
             style={{
               width: 56, height: 56, borderRadius: '50%', background: 'rgba(48,209,88,0.2)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, color: 'var(--success, #30d158)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--success, #30d158)',
               animation: 'aparecer-check 0.3s ease'
             }}
           >
-            ✓
+            <Icon nome="check" tamanho={28} />
           </div>
           <p style={{ color: '#fff', fontWeight: 600, margin: 0 }}>Código lido!</p>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, margin: 0 }}>{codigoConfirmado}</p>

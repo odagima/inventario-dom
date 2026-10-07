@@ -4,6 +4,7 @@ import { editarQuantidadeItemContagem, trocarProdutoItemContagem, removerItemCon
 import { registrarSaidaContagem, listarSaidasDaSessao, removerSaidaContagem } from '../../lib/api'
 import { useEscParaFechar } from '../lib/hooks'
 import { LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../../lib/perdas'
+import Icon from '../components/Icon'
 
 const LABEL_STATUS = { contado: 'Contado', pendente: 'Pendente', extra: 'Fora da lista' }
 const LABEL_TIPO = {
@@ -669,7 +670,7 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ color: 'var(--danger)' }}>− {s.quantidade} {s.produtos?.unidade_medida}</span>
-                      <button onClick={() => excluirSaida(s.id)} style={{ color: 'var(--danger)', background: 'none', border: 'none', fontSize: 16 }} aria-label="Remover saída">×</button>
+                      <button onClick={() => excluirSaida(s.id)} style={{ color: 'var(--danger)', background: 'none', border: 'none' }} aria-label="Remover saída"><Icon nome="x" tamanho={16} /></button>
                     </div>
                   </div>
                 ))}
