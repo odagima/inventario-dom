@@ -25,6 +25,8 @@ import DiagnosticoPrato from './pages/DiagnosticoPrato'
 import Cardapio from './pages/Cardapio'
 import ConsolidadoSemanal from './pages/ConsolidadoSemanal'
 import ArvoreDePorcionamento from './pages/ArvoreDePorcionamento'
+import Funcionarios from './pages/Funcionarios'
+import Equipamentos from './pages/Equipamentos'
 import Cobertura from './pages/Cobertura'
 import Backup from './pages/Backup'
 import Painel from './pages/Painel'
@@ -126,7 +128,9 @@ const MODULOS = [
       { id: 'base_produtos', label: 'Produtos', perm: 'cadastros.ver' },
       { id: 'base_lancamentos', label: 'Lançamentos', perm: 'contagens.ver' },
       { id: 'base_arvore', label: 'Árvore de transformação', perm: 'cadastros.ver' },
-      { id: 'base_arvore_porcionamento', label: 'Árvore de porcionamento', perm: 'cadastros.ver' },
+      { id: 'base_arvore_porcionamento', label: 'Porcionamento', perm: 'cadastros.ver' },
+      { id: 'base_funcionarios', label: 'Funcionários', perm: 'cadastros.ver' },
+      { id: 'base_equipamentos', label: 'Equipamentos', perm: 'cadastros.ver' },
       { id: 'base_hist_produto', label: 'Histórico do produto', perm: 'cadastros.ver' },
       { id: 'base_diagnostico', label: 'Diagnóstico de prato', perm: 'cadastros.ver' },
       { id: 'base_historico_ft', label: 'Histórico Ficha Técnica', perm: 'cadastros.ver' },
@@ -306,6 +310,8 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
           {aba === 'base_lancamentos' && <Lancamentos />}
           {aba === 'base_arvore' && <ArvoreTransformacao />}
           {aba === 'base_arvore_porcionamento' && <ArvoreDePorcionamento />}
+          {aba === 'base_funcionarios' && <Funcionarios />}
+          {aba === 'base_equipamentos' && <Equipamentos />}
           {aba === 'base_hist_produto' && <HistoricoProduto />}
           {aba === 'base_diagnostico' && <DiagnosticoPrato />}
           {aba === 'base_historico_ft' && <HistoricoFichasTecnicas />}
