@@ -1,108 +1,59 @@
 import { useEffect, useState } from 'react'
 import Topbar from '../components/Topbar'
-import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
-import Icon from '../components/Icon'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarTurnoAberto, turnoVencido, periodoDoTurno, LABEL_PERIODO, abrirTurno, fecharTurno } from '../lib/turnosApi'
 
-// Abrir/Fechar operação (07/10/2026, pedido do Felipe: "tipo caixa... abre, opera, precisa fechar
-// pra operar o próximo turno"). Botão próprio na Home, antes do menu de lançamentos — Produção e
-// Requisição travam sem um turno aberto no local escolhido (ver `turnoUtilizavel` em
-// src/lib/turnosApi.js).
+// Abrir/Fechar praça (07/10/2026, pedido do Felipe — rodada 2: "tipo caixa", depois simplificado
+// pra "clica, escolhe o local (se não tiver vínculo fixo), confirma, e só DEPOIS pergunta se quer
+// movimentar item — se sim, abre Requisição/Transferência; se não, só fecha o popup").
 //
-// Abrir = transferência de saída (de onde o material está vindo → o local da praça). Fechar =
-// transferência de volta (da praça → pra onde está indo, normalmente a câmara fria/Estoque
-// Central). As duas são a MESMA lista de itens (produto + quantidade), só muda a direção.
+// Quem tem `local_estoque_padrao_id` vinculado (ver migration_v24.sql, Admin → Usuários) nem vê
+// seletor de praça — só abre/fecha a dela. Quem não tem (gerente, por exemplo) escolhe livremente,
+// igual antes.
+//
+// Abrir/fechar em si não pede item nenhum (isso é SEPARADO, pergunta depois) — só cria/encerra o
+// turno. `abrirTurno`/`fecharTurno` aceitam lista de itens vazia de propósito (ver turnosApi.js).
 
 function hojeHora(iso) {
   return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function ListaItens({ itens, onMudar }) {
-  const [produto, setProduto] = useState(null)
-  const [quantidade, setQuantidade] = useState('')
+export default function TelaOperacao({ usuarioLogado, onSair, onAbrirRequisicao }) {
+  const localFixoId = usuarioLogado?.localPadraoId || null
+  const localFixoNome = usuarioLogado?.localPadraoNome || null
 
-  function adicionar() {
-    const qtd = Number(String(quantidade).replace(',', '.'))
-    if (!produto || !(qtd > 0)) return
-    onMudar([...itens, { codigoEverest: produto.codigo_everest, nome: produto.nome, unidade: produto.unidade_medida, quantidade: qtd }])
-    setProduto(null)
-    setQuantidade('')
-  }
-
-  function remover(i) {
-    onMudar(itens.filter((_, idx) => idx !== i))
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {itens.map((it, i) => (
-        <div key={i} className="list-item">
-          <span>{it.nome} <span className="muted" style={{ fontSize: 11 }}>· {it.quantidade} {it.unidade}</span></span>
-          <button onClick={() => remover(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)' }}><Icon nome="x" tamanho={16} /></button>
-        </div>
-      ))}
-
-      <BuscaProdutoPerda onSelecionar={setProduto} />
-      {produto && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <p style={{ margin: 0, fontWeight: 500 }}>{produto.nome}</p>
-          <button type="button" className="ghost" onClick={() => setProduto(null)}>trocar</button>
-        </div>
-      )}
-      {produto && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-          <div style={{ flex: 1 }}>
-            <label className="muted">Quantidade ({produto.unidade_medida})</label>
-            <input type="number" min="0" step="0.001" inputMode="decimal" value={quantidade} onChange={(e) => setQuantidade(e.target.value)} />
-          </div>
-          <button onClick={adicionar} disabled={!(Number(String(quantidade).replace(',', '.')) > 0)} style={{ height: 44 }}>+ item</button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export default function TelaOperacao({ usuarioLogado, onSair }) {
   const [locais, setLocais] = useState([])
-  const [localEstoqueId, setLocalEstoqueId] = useState('')
-  const [turno, setTurno] = useState(null) // null = nenhum local escolhido ainda, ou sem turno aberto nele
-  const [carregando, setCarregando] = useState(false)
-  const [localOutro, setLocalOutro] = useState('') // origem (abrir) ou destino (fechar)
-  const [itens, setItens] = useState([])
+  const [localEstoqueId, setLocalEstoqueId] = useState(localFixoId || '')
+  const [turno, setTurno] = useState(null)
+  const [carregando, setCarregando] = useState(true)
   const [salvando, setSalvando] = useState(false)
   const [erro, setErro] = useState('')
+  const [acaoFeita, setAcaoFeita] = useState(null) // null | 'abriu' | 'fechou' — dispara a pergunta de movimentar
 
-  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => setErro(e.message)) }, [])
+  useEffect(() => {
+    listarLocaisEstoque().then(setLocais).catch((e) => setErro(e.message))
+  }, [])
 
-  async function escolherLocal(id) {
-    setLocalEstoqueId(id)
-    setItens([])
-    setErro('')
-    setLocalOutro('')
-    if (!id) { setTurno(null); return }
+  useEffect(() => {
+    if (!localEstoqueId) { setCarregando(false); return }
+    let cancelado = false
     setCarregando(true)
-    try {
-      const t = await buscarTurnoAberto(id)
-      setTurno(t)
-      // Sugere o Estoque Central como origem/destino padrão — a maioria das praças abastece e
-      // devolve pra lá; quem precisar de outro local troca no próprio seletor.
-      const central = locais.find((l) => l.nome.toLowerCase().includes('central'))
-      if (central) setLocalOutro(central.id)
-    } catch (e) {
-      setErro(e.message)
-    } finally {
-      setCarregando(false)
-    }
-  }
+    buscarTurnoAberto(localEstoqueId)
+      .then((t) => { if (!cancelado) setTurno(t) })
+      .catch((e) => { if (!cancelado) setErro(e.message) })
+      .finally(() => { if (!cancelado) setCarregando(false) })
+    return () => { cancelado = true }
+  }, [localEstoqueId])
+
+  const vencido = turno && turnoVencido(turno)
+  const nomeLocal = localFixoNome || locais.find((l) => l.id === localEstoqueId)?.nome
 
   async function handleAbrir() {
-    if (!localOutro || itens.length === 0) { setErro('Escolha de onde está vindo o material e pelo menos 1 item.'); return }
     setErro('')
     setSalvando(true)
     try {
-      await abrirTurno({ localEstoqueId, localOrigemId: localOutro, itens, usuario: usuarioLogado?.nome })
-      await escolherLocal(localEstoqueId)
+      await abrirTurno({ localEstoqueId, localOrigemId: null, itens: [], usuario: usuarioLogado?.nome })
+      setAcaoFeita('abriu')
     } catch (e) {
       setErro(e.message)
     } finally {
@@ -111,12 +62,11 @@ export default function TelaOperacao({ usuarioLogado, onSair }) {
   }
 
   async function handleFechar() {
-    if (!localOutro) { setErro('Escolha pra onde o material está voltando.'); return }
     setErro('')
     setSalvando(true)
     try {
-      await fecharTurno({ turnoId: turno.id, localDestinoId: localOutro, itens, usuario: usuarioLogado?.nome })
-      await escolherLocal(localEstoqueId)
+      await fecharTurno({ turnoId: turno.id, localDestinoId: null, itens: [], usuario: usuarioLogado?.nome })
+      setAcaoFeita('fechou')
     } catch (e) {
       setErro(e.message)
     } finally {
@@ -124,69 +74,58 @@ export default function TelaOperacao({ usuarioLogado, onSair }) {
     }
   }
 
-  const vencido = turno && turnoVencido(turno)
-  const nomeLocal = locais.find((l) => l.id === localEstoqueId)?.nome
-
   return (
     <div className="screen">
-      <Topbar titulo="Operação" subtitulo="abrir e fechar por praça" onVoltar={onSair} />
+      <Topbar titulo="Abrir/Fechar praça" onVoltar={onSair} />
 
-      <div className="card">
-        <label className="muted">Praça / local de estoque</label>
-        <select value={localEstoqueId} onChange={(e) => escolherLocal(e.target.value)}>
-          <option value="">Selecione…</option>
-          {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
-        </select>
-      </div>
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: '0 0 12px' }}>{erro}</p>}
 
-      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: '12px 0 0' }}>{erro}</p>}
-
-      {carregando && <p className="muted" style={{ marginTop: 12 }}>Carregando…</p>}
-
-      {!carregando && localEstoqueId && !turno && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Abrir operação — {nomeLocal}</p>
-          <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>O que está sendo levado pra praça agora, pra começar a operar.</p>
-
-          <div style={{ marginBottom: 12 }}>
-            <label className="muted">Vindo de</label>
-            <select value={localOutro} onChange={(e) => setLocalOutro(e.target.value)}>
-              <option value="">Selecione…</option>
-              {locais.filter((l) => l.id !== localEstoqueId).map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
-            </select>
+      {acaoFeita && (
+        <div className="card" style={{ textAlign: 'center' }}>
+          <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>
+            {acaoFeita === 'abriu' ? `Praça ${nomeLocal} aberta.` : `Praça ${nomeLocal} fechada.`}
+          </p>
+          <p className="muted" style={{ margin: '0 0 16px', fontSize: 13 }}>
+            {acaoFeita === 'abriu' ? 'Vai levar algum item pra praça agora?' : 'Vai devolver algum item pro estoque agora?'}
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onSair} style={{ flex: 1 }}>Não, obrigado</button>
+            <button className="primary" onClick={onAbrirRequisicao} style={{ flex: 1 }}>Sim</button>
           </div>
+        </div>
+      )}
 
-          <ListaItens itens={itens} onMudar={setItens} />
+      {!acaoFeita && !localFixoId && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <label className="muted">Praça / local de estoque</label>
+          <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
+            <option value="">Selecione…</option>
+            {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+          </select>
+        </div>
+      )}
 
-          <button className="primary" onClick={handleAbrir} disabled={salvando || !localOutro || itens.length === 0} style={{ width: '100%', marginTop: 14 }}>
-            {salvando ? 'Abrindo…' : 'Abrir operação'}
+      {!acaoFeita && localEstoqueId && carregando && <p className="muted">Carregando…</p>}
+
+      {!acaoFeita && localEstoqueId && !carregando && !turno && (
+        <div className="card" style={{ textAlign: 'center' }}>
+          <p style={{ margin: '0 0 16px', fontWeight: 600, fontSize: 15 }}>Abrir a praça {nomeLocal}?</p>
+          <button className="primary" onClick={handleAbrir} disabled={salvando} style={{ width: '100%' }}>
+            {salvando ? 'Abrindo…' : 'Abrir praça'}
           </button>
         </div>
       )}
 
-      {!carregando && turno && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>
-            {vencido ? 'Operação vencida' : 'Operação aberta'} — {nomeLocal}
-          </p>
-          <p className="muted" style={{ margin: '0 0 14px', fontSize: 12.5 }}>
+      {!acaoFeita && localEstoqueId && !carregando && turno && (
+        <div className="card" style={{ textAlign: 'center' }}>
+          <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Fechar a praça {nomeLocal}?</p>
+          <p className="muted" style={{ margin: '0 0 16px', fontSize: 12.5 }}>
             Aberta {hojeHora(turno.aberto_em)} ({LABEL_PERIODO[periodoDoTurno(turno.aberto_em)]})
             {turno.aberto_por ? ` por ${turno.aberto_por}` : ''}.
-            {vencido && ' Passou das 3h — feche antes de abrir uma nova.'}
+            {vencido && ' Passou das 3h — feche pra liberar um turno novo.'}
           </p>
-
-          <div style={{ marginBottom: 12 }}>
-            <label className="muted">Voltando pra</label>
-            <select value={localOutro} onChange={(e) => setLocalOutro(e.target.value)}>
-              <option value="">Selecione…</option>
-              {locais.filter((l) => l.id !== localEstoqueId).map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
-            </select>
-          </div>
-
-          <ListaItens itens={itens} onMudar={setItens} />
-
-          <button className="primary" onClick={handleFechar} disabled={salvando || !localOutro} style={{ width: '100%', marginTop: 14 }}>
-            {salvando ? 'Fechando…' : 'Fechar operação'}
+          <button className="primary" onClick={handleFechar} disabled={salvando} style={{ width: '100%' }}>
+            {salvando ? 'Fechando…' : 'Fechar praça'}
           </button>
         </div>
       )}

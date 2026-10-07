@@ -73,8 +73,8 @@ export async function abrirTurno({ localEstoqueId, localOrigemId, itens, usuario
   if (existente) {
     throw new Error(
       turnoVencido(existente)
-        ? 'A operação anterior desse local passou das 3h e venceu — feche ela antes de abrir uma nova.'
-        : 'Já existe uma operação aberta nesse local.'
+        ? 'A praça anterior passou das 3h e venceu — feche ela antes de abrir uma nova.'
+        : 'Essa praça já está aberta.'
     )
   }
 
@@ -100,7 +100,7 @@ export async function abrirTurno({ localEstoqueId, localOrigemId, itens, usuario
 export async function fecharTurno({ turnoId, localDestinoId, itens, usuario }) {
   const { data: turno, error: erroT } = await supabase.from('turnos').select('*').eq('id', turnoId).single()
   if (erroT) throw erroT
-  if (turno.status !== 'aberto') throw new Error('Essa operação já está fechada.')
+  if (turno.status !== 'aberto') throw new Error('Essa praça já está fechada.')
 
   for (const item of itens) {
     await criarTransferenciaImediata({

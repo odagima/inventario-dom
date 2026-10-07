@@ -322,7 +322,7 @@ function FormAbrir({ usuario, prefill, onPronto }) {
     try {
       const localEfetivo = prefill?.localEstoqueId || localEstoqueId
       const turno = await turnoUtilizavel(localEfetivo)
-      if (!turno) throw new Error('Esse local não tem operação aberta — abra em "Abrir/Fechar operação" antes de lançar.')
+      if (!turno) throw new Error('Essa praça não está aberta — abra em "Abrir/Fechar praça" antes de lançar.')
       const entrada = {
         codigoEverest: produto.codigo_everest,
         produtoId: produto.id,
@@ -431,7 +431,7 @@ function FormProcesso({ raizId, usuario, onErro }) {
   async function criarSubEtapa(etapaOrigem, item) {
     try {
       const turno = await turnoUtilizavel(etapaOrigem.local_estoque_id)
-      if (!turno) throw new Error('Esse local não tem operação aberta — abra em "Abrir/Fechar operação" antes de continuar.')
+      if (!turno) throw new Error('Essa praça não está aberta — abra em "Abrir/Fechar praça" antes de continuar.')
       await abrirProducao({
         data: hojeIso(), usuario,
         localEstoqueId: etapaOrigem.local_estoque_id,

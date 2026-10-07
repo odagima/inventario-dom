@@ -226,12 +226,22 @@ function CadastroLocais() {
         <p className="muted">Carregando…</p>
       ) : (
         locais.map((l) => (
-          <div key={l.id} className="list-item">
-            <span>{l.nome}</span>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }} className="muted">
-              <input type="checkbox" checked={l.ativo} onChange={(e) => handleAtualizarCampo(l, 'ativo', e.target.checked)} />
-              ativo
-            </label>
+          <div key={l.id} className="list-item" style={{ gap: 10 }}>
+            <span style={{ flexShrink: 0 }}>{l.nome}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <select
+                value={l.unidade_id || ''}
+                onChange={(e) => handleAtualizarCampo(l, 'unidade_id', e.target.value || null)}
+                style={{ fontSize: 12.5, padding: '6px 8px' }}
+              >
+                <option value="">Sem loja</option>
+                {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }} className="muted">
+                <input type="checkbox" checked={l.ativo} onChange={(e) => handleAtualizarCampo(l, 'ativo', e.target.checked)} />
+                ativo
+              </label>
+            </div>
           </div>
         ))
       )}

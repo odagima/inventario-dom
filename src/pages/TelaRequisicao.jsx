@@ -138,7 +138,7 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onFechar }) {
     try {
       const localQuemAge = tipo === 'requisicao' ? destinoId : origemId
       const turno = await turnoUtilizavel(localQuemAge)
-      if (!turno) throw new Error('Esse local não tem operação aberta — abra em "Abrir/Fechar operação" antes de lançar.')
+      if (!turno) throw new Error('Essa praça não está aberta — abra em "Abrir/Fechar praça" antes de lançar.')
       if (tipo === 'requisicao') {
         const resultado = await criarRequisicao({
           localSolicitanteId: destinoId, localAtendenteId: origemId,

@@ -7,8 +7,10 @@ import {
   atualizarAcessoUsuario,
   criarUsuarioComPerfil,
   editarNomeUsuarioApp,
+  atualizarLocalPadraoUsuario,
   listarUnidadesAdmin
 } from '../lib/adminApi'
+import { listarLocaisEstoque } from '../../lib/locaisEstoqueApi'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 02/09/2026 (§67) — USUÁRIOS E PERFIS, numa tela só.
@@ -100,6 +102,7 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
   const [usuarios, setUsuarios] = useState([])
   const [perfis, setPerfis] = useState([])
   const [unidades, setUnidades] = useState([])
+  const [locais, setLocais] = useState([])
   const [semMigracao, setSemMigracao] = useState(false)
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState(null)
@@ -124,12 +127,13 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
     setCarregando(true)
     setErro(null)
     try {
-      const [us, ps, un] = await Promise.all([listarUsuariosApp(), listarPerfisAcesso(), listarUnidadesAdmin()])
+      const [us, ps, un, lo] = await Promise.all([listarUsuariosApp(), listarPerfisAcesso(), listarUnidadesAdmin(), listarLocaisEstoque()])
       setUsuarios(us || [])
       // `null` = tabela `perfis_acesso` não existe ainda (migration_v15 não rodada).
       setSemMigracao(ps === null)
       setPerfis(ps || [])
       setUnidades((un || []).filter((u) => u.ativo !== false))
+      setLocais(lo || [])
     } catch (e) {
       setErro(e.message || String(e))
     } finally {
@@ -251,12 +255,16 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
               usuario={editando}
               perfis={perfis}
               unidades={unidades}
+              locais={locais}
               semMigracao={semMigracao}
               onFechar={() => setEditando(null)}
               onSalvar={async (mudancas) => {
                 await acao(async () => {
                   if (mudancas.nome != null && mudancas.nome !== editando.nome_completo) {
                     await editarNomeUsuarioApp(editando.id, mudancas.nome)
+                  }
+                  if (mudancas.localEstoquePadraoId !== undefined) {
+                    await atualizarLocalPadraoUsuario(editando.id, mudancas.localEstoquePadraoId)
                   }
                   const temAcesso = mudancas.perfilId !== undefined || mudancas.unidadeId !== undefined ||
                     mudancas.limparUnidade || mudancas.pin || mudancas.ativo !== undefined
@@ -450,10 +458,14 @@ function NovaPessoa({ perfis, unidades, onSalvar }) {
   )
 }
 
-function PainelPessoa({ usuario, perfis, unidades, semMigracao, onFechar, onSalvar }) {
+function PainelPessoa({ usuario, perfis, unidades, locais, semMigracao, onFechar, onSalvar }) {
   const [nome, setNome] = useState(usuario.nome_completo || '')
   const [perfilId, setPerfilId] = useState(usuario.perfil_id || '')
   const [unidadeId, setUnidadeId] = useState(usuario.unidade_id || '')
+  // `usuario.local_estoque_padrao_id` só vem preenchido quando `listar_usuarios_seguro` devolver
+  // esse campo (ainda não confirmado — ver migration_v24.sql). Até lá o campo sempre abre vazio
+  // aqui, mas SALVAR já funciona direto na tabela (ver `atualizarLocalPadraoUsuario`).
+  const [localEstoquePadraoId, setLocalEstoquePadraoId] = useState(usuario.local_estoque_padrao_id || '')
   const [pin, setPin] = useState('')
   const [ativo, setAtivo] = useState(usuario.ativo !== false)
   const pinOk = pin === '' || /^[0-9]{4}$/.test(pin)
@@ -485,6 +497,13 @@ function PainelPessoa({ usuario, perfis, unidades, semMigracao, onFechar, onSalv
           <select value={unidadeId} onChange={(e) => setUnidadeId(e.target.value)} disabled={semMigracao} style={{ width: '100%' }}>
             <option value="">Sem loja</option>
             {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 11.5 }}>
+          Local padrão (opcional)
+          <select value={localEstoquePadraoId} onChange={(e) => setLocalEstoquePadraoId(e.target.value)} style={{ width: '100%' }}>
+            <option value="">Escolhe livremente</option>
+            {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
           </select>
         </label>
         <label style={{ fontSize: 11.5 }}>
@@ -521,6 +540,12 @@ function PainelPessoa({ usuario, perfis, unidades, semMigracao, onFechar, onSalv
             perfilId: semMigracao ? undefined : (perfilId || null),
             unidadeId: semMigracao ? undefined : (unidadeId || null),
             limparUnidade: !semMigracao && !unidadeId && !!usuario.unidade_id,
+            // só manda se a pessoa MEXEU no campo — como ele pode abrir vazio sem o valor real
+            // (ver comentário no useState acima), mandar sempre arriscaria limpar um vínculo já
+            // salvo só porque a tela não sabia que ele existia.
+            localEstoquePadraoId: localEstoquePadraoId !== (usuario.local_estoque_padrao_id || '')
+              ? (localEstoquePadraoId || null)
+              : undefined,
             pin: pin || null,
             ativo
           })}

@@ -3820,6 +3820,17 @@ export async function editarNomeUsuarioApp(id, nomeCompleto) {
   if (error) throw error
 }
 
+// Local de estoque padrão (migration_v24.sql, 07/10/2026, pedido do Felipe: "se a senha da pessoa
+// está vinculada com loja tal, local y, só consegue abrir aquela [praça]"). Mesmo caminho direto
+// de `editarNomeUsuarioApp` (não passa por `atualizar_usuario_seguro`) — essa RPC já tem campos
+// que não estão commitados em nenhuma migração deste repositório, então em vez de arriscar
+// reescrevê-la sem ver a definição atual, esse campo novo escreve direto na tabela (RLS de
+// `usuarios_app` já permite update direto, só o SELECT é que passa por function por causa do PIN).
+export async function atualizarLocalPadraoUsuario(id, localEstoqueId) {
+  const { error } = await supabase.from('usuarios_app').update({ local_estoque_padrao_id: localEstoqueId || null }).eq('id', id)
+  if (error) throw error
+}
+
 export async function deletarUsuarioApp(id) {
   const { error } = await supabase.rpc('deletar_usuario_seguro', { usuario_id: id })
   if (error) throw error

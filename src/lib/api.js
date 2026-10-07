@@ -219,7 +219,11 @@ export async function verificarPin(pin) {
     permissoes: Array.isArray(linha.permissoes) ? linha.permissoes : [],
     ehDesenvolvedor: !!linha.eh_desenvolvedor,
     unidadeId: linha.unidade_id ?? null,
-    unidadeNome: linha.unidade_nome ?? null
+    unidadeNome: linha.unidade_nome ?? null,
+    // migration_v24.sql — mesmo espírito de compatibilidade: se a migração ainda não rodou, os dois
+    // vêm `undefined` e caem em `null` (ninguém fica travado em "Abrir/Fechar praça").
+    localPadraoId: linha.local_estoque_padrao_id ?? null,
+    localPadraoNome: linha.local_estoque_padrao_nome ?? null
   }
 }
 

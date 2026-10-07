@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import IconTile from '../components/IconTile'
 import Icon from '../components/Icon'
 import Modal from '../components/Modal'
@@ -9,6 +9,7 @@ import TelaPerdas from './TelaPerdas'
 import TelaProducao from './TelaProducao'
 import TelaRequisicao from './TelaRequisicao'
 import TelaOperacao from './TelaOperacao'
+import { buscarTurnoAberto, turnoVencido } from '../lib/turnosApi'
 
 // Reformulada a pedido do Felipe (06/10/2026): os botões empilhados pareciam "um monte de
 // funcionalidade jogada" — vira grade de ícones (ver IconTile.jsx/styles.css `.icon-tile`),
@@ -37,6 +38,23 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
   const [erroRecebimento, setErroRecebimento] = useState('')
 
   const [telaAberta, setTelaAberta] = useState(null) // null | 'producao' | 'requisicao' | 'operacao'
+
+  // Bolinha do tile "Abrir/Fechar praça" (07/10/2026, pedido do Felipe) — só pra quem tem local
+  // padrão vinculado (ver migration_v24.sql); sem vínculo, o tile fica neutro (escolhe livremente
+  // dentro da tela, igual antes). `null` = sem turno aberto; truthy = aberto.
+  const localFixoId = usuarioLogado?.localPadraoId || null
+  const [turnoDoLocalFixo, setTurnoDoLocalFixo] = useState(null)
+
+  function atualizarStatusPraca() {
+    if (!localFixoId) return
+    buscarTurnoAberto(localFixoId).then(setTurnoDoLocalFixo).catch(() => {})
+  }
+  useEffect(() => { atualizarStatusPraca() }, [localFixoId])
+
+  function fecharOperacao() {
+    setTelaAberta(null)
+    atualizarStatusPraca()
+  }
 
   // Contagem e Perdas são o mesmo fluxo por baixo (SelecaoUnidade decide a sessão, só o tipo
   // muda) — mesma lógica que já vivia em App.jsx antes de virar popup.
@@ -76,7 +94,13 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
       </div>
 
       <div className="icon-grid">
-        <IconTile icone="clock" cor="var(--dom-marinho)" label="Abrir/Fechar operação" onClick={() => setTelaAberta('operacao')} />
+        <IconTile
+          icone="clock"
+          cor="var(--dom-marinho)"
+          label={!localFixoId ? 'Abrir/Fechar praça' : turnoDoLocalFixo ? `Fechar ${usuarioLogado.localPadraoNome}` : `Abrir ${usuarioLogado.localPadraoNome}`}
+          bolinha={!localFixoId ? null : turnoDoLocalFixo ? (turnoVencido(turnoDoLocalFixo) ? 'var(--warning)' : 'var(--danger)') : 'var(--success)'}
+          onClick={() => setTelaAberta('operacao')}
+        />
         <IconTile icone="activity" cor="var(--dom-musgo)" label="Acompanhamento" onClick={onEntrarAcompanhamento} />
         <IconTile icone="clipboard-list" cor="var(--dom-musgo)" label="Contagem" onClick={() => abrirContagem(null)} />
         <IconTile icone="chef-hat" cor="var(--dom-laranja)" label="Produção" onClick={() => setTelaAberta('producao')} />
@@ -127,8 +151,8 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
         </Modal>
       )}
       {telaAberta === 'operacao' && (
-        <Modal onFechar={() => setTelaAberta(null)} largura={440}>
-          <TelaOperacao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} />
+        <Modal onFechar={fecharOperacao} largura={440}>
+          <TelaOperacao usuarioLogado={usuarioLogado} onSair={fecharOperacao} onAbrirRequisicao={() => setTelaAberta('requisicao')} />
         </Modal>
       )}
 
