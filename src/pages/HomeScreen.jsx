@@ -15,7 +15,7 @@ import RecebimentoForm from '../components/RecebimentoForm'
 //
 // "Trocar usuário" saiu do rodapé e virou ícone no canto superior direito do cabeçalho — pede
 // confirmação num popup (ver Modal.jsx) antes de sair, pra não trocar sem querer num toque perdido.
-export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarProducao, onEntrarRequisicao, onEntrarPerdas, onEntrarProdutividade, onAbrirCadastro, onAbrirAdmin, onSair }) {
+export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarProducao, onEntrarRequisicao, onEntrarPerdas, onEntrarProdutividade, onEntrarOperacao, onAbrirCadastro, onAbrirAdmin, onSair }) {
   const nivel = usuarioLogado.nivelAcesso
   const podeCadastro = nivel === 'administrativo' || nivel === 'estoque_compras'
   const podeAdmin = nivel === 'administrativo'
@@ -44,6 +44,7 @@ export default function HomeScreen({ usuarioLogado, onEntrarContagem, onEntrarPr
       </div>
 
       <div className="icon-grid">
+        <IconTile icone="clock" cor="var(--dom-marinho)" label="Abrir/Fechar operação" onClick={onEntrarOperacao} />
         <IconTile icone="clipboard-list" cor="var(--dom-musgo)" label="Contagem" onClick={onEntrarContagem} />
         <IconTile icone="chef-hat" cor="var(--dom-laranja)" label="Produção" onClick={onEntrarProducao} />
         <IconTile icone="arrows-exchange" cor="var(--dom-marinho)" label="Requisição / Transferência" onClick={onEntrarRequisicao} />

@@ -4,6 +4,7 @@ import Topbar from '../components/Topbar'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
+import { turnoUtilizavel } from '../lib/turnosApi'
 import {
   listarRequisicoesPendentes,
   listarRequisicoesHistorico,
@@ -121,6 +122,9 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onErro }) {
     setSalvando(true)
     setMsg('')
     try {
+      const localQuemAge = tipo === 'requisicao' ? destinoId : origemId
+      const turno = await turnoUtilizavel(localQuemAge)
+      if (!turno) throw new Error('Esse local não tem operação aberta — abra em "Abrir/Fechar operação" antes de lançar.')
       if (tipo === 'requisicao') {
         const resultado = await criarRequisicao({
           localSolicitanteId: destinoId, localAtendenteId: origemId,

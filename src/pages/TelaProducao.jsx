@@ -6,6 +6,7 @@ import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarFatoresCorrecao, calcularFCTeorico, filhosDiretos, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
 import { registrarMovimento } from '../lib/estoqueMovimentosApi'
+import { turnoUtilizavel } from '../lib/turnosApi'
 import { buscarProdutosPorCodigosEverest } from '../lib/api'
 import {
   listarProducoesEmAndamento,
@@ -311,6 +312,9 @@ function FormAbrir({ usuario, prefill, onPronto, onErro }) {
   async function salvar() {
     setSalvando(true)
     try {
+      const localEfetivo = prefill?.localEstoqueId || localEstoqueId
+      const turno = await turnoUtilizavel(localEfetivo)
+      if (!turno) throw new Error('Esse local não tem operação aberta — abra em "Abrir/Fechar operação" antes de lançar.')
       const entrada = {
         codigoEverest: produto.codigo_everest,
         produtoId: produto.id,
@@ -416,6 +420,8 @@ function FormProcesso({ raizId, usuario, onErro }) {
 
   async function criarSubEtapa(etapaOrigem, item) {
     try {
+      const turno = await turnoUtilizavel(etapaOrigem.local_estoque_id)
+      if (!turno) throw new Error('Esse local não tem operação aberta — abra em "Abrir/Fechar operação" antes de continuar.')
       await abrirProducao({
         data: hojeIso(), usuario,
         localEstoqueId: etapaOrigem.local_estoque_id,

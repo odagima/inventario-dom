@@ -10,7 +10,7 @@ import { supabase } from './supabase'
 // Felipe: com locais de estoque separados, ele quer visibilidade de movimentação em tempo real
 // pra achar desfalque (contagem sozinha só mostra que mudou, não se foi consumo normal ou sumiço).
 
-export async function registrarMovimento({ localEstoqueId, codigoEverest, quantidade, tipo, producaoId, transferenciaId, requisicaoId, recebimentoId, usuario }) {
+export async function registrarMovimento({ localEstoqueId, codigoEverest, quantidade, tipo, producaoId, transferenciaId, requisicaoId, recebimentoId, turnoId, usuario }) {
   const { data, error } = await supabase
     .from('estoque_movimentos')
     .insert({
@@ -22,6 +22,7 @@ export async function registrarMovimento({ localEstoqueId, codigoEverest, quanti
       transferencia_id: transferenciaId || null,
       requisicao_id: requisicaoId || null,
       recebimento_id: recebimentoId || null,
+      turno_id: turnoId || null,
       usuario: usuario || null
     })
     .select()

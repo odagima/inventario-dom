@@ -129,14 +129,15 @@ export async function listarTransferenciasHistorico(limite = 200) {
 
 // Debita a origem no envio — fica "em trânsito" (nem origem nem destino têm o produto nesse
 // meio-tempo) até o destino confirmar recebimento, que credita de verdade.
-export async function criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario }) {
+export async function criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario, turnoId }) {
   if (localOrigemId === localDestinoId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidade) > 0)) throw new Error('Informe uma quantidade maior que zero.')
   const { data: transferencia, error } = await supabase
     .from('transferencias')
     .insert({
       local_origem_id: localOrigemId, local_destino_id: localDestinoId,
-      codigo_everest: codigoEverest, quantidade: Number(quantidade), usuario_envio: usuario || null
+      codigo_everest: codigoEverest, quantidade: Number(quantidade), usuario_envio: usuario || null,
+      turno_id: turnoId || null
     })
     .select()
     .single()
@@ -144,8 +145,17 @@ export async function criarTransferencia({ localOrigemId, localDestinoId, codigo
 
   await registrarMovimento({
     localEstoqueId: localOrigemId, codigoEverest, quantidade: -Number(quantidade),
-    tipo: 'transferencia_saida', transferenciaId: transferencia.id, usuario
+    tipo: 'transferencia_saida', transferenciaId: transferencia.id, turnoId, usuario
   })
+  return transferencia
+}
+
+// Mesma pessoa manda e recebe no mesmo instante — caso do Turno (ver src/lib/turnosApi.js):
+// quem abre a operação já está fisicamente levando o material pra praça, não faz sentido ficar
+// "em trânsito" esperando alguém confirmar. Só encadeia criar + confirmar.
+export async function criarTransferenciaImediata({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario, turnoId }) {
+  const transferencia = await criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario, turnoId })
+  await confirmarRecebimentoTransferencia(transferencia.id, usuario)
   return transferencia
 }
 
@@ -170,7 +180,7 @@ export async function confirmarRecebimentoTransferencia(transferenciaId, usuario
 
   await registrarMovimento({
     localEstoqueId: transferencia.local_destino_id, codigoEverest: transferencia.codigo_everest, quantidade: Number(transferencia.quantidade),
-    tipo: 'transferencia_entrada', transferenciaId, usuario
+    tipo: 'transferencia_entrada', transferenciaId, turnoId: transferencia.turno_id, usuario
   })
 
   const { error } = await supabase
