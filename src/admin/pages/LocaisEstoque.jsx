@@ -3,7 +3,6 @@ import BuscaProdutoPerda from '../../components/BuscaProdutoPerda'
 import { listarLocaisEstoque, listarLocaisEstoqueTodos, criarLocalEstoque, atualizarLocalEstoque } from '../../lib/locaisEstoqueApi'
 import { listarSaldosCalculados, buscarHistoricoMovimentos, removerMovimento } from '../../lib/estoqueMovimentosApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../../lib/requisicaoTransferenciaApi'
-import { listarTurnosAbertos, listarTurnosHistorico, turnoVencido, periodoDoTurno, LABEL_PERIODO } from '../../lib/turnosApi'
 import { buscarProdutosPorCodigosEverest } from '../../lib/api'
 import { listarUnidadesAdmin } from '../lib/adminApi'
 import { formatarNumero } from '../lib/formato'
@@ -18,13 +17,6 @@ import { formatarNumero } from '../lib/formato'
 //
 // 07/10/2026 (pedido do Felipe): até aqui criar um local novo exigia SQL direto — ganhou um
 // cadastro simples em cima (mesmo molde de Unidades.jsx), o resto da tela continua só leitura.
-//
-// 07/10/2026 (pedido do Felipe): "uma central de acompanhamento... algo que pudéssemos acompanhar
-// em tempo real o que estivesse acontecendo nas praças e produções" — ganhou `StatusOperacao`
-// (status do turno de cada local, atualizando sozinho), logo no topo desta mesma tela em vez de
-// uma tela nova — já era aqui que se via saldo/histórico por local.
-
-const INTERVALO_ATUALIZACAO_MS = 20000
 
 const LABEL_TIPO = {
   producao_entrada: 'Entrada (produção)',
@@ -46,15 +38,6 @@ function fmt(n, casas = 3) {
 function formatarDataHora(iso) {
   if (!iso) return '—'
   return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function faz(iso) {
-  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
-  if (min < 1) return 'agora'
-  if (min < 60) return `há ${min} min`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `há ${h}h`
-  return `há ${Math.floor(h / 24)} dias`
 }
 
 function primeiroDiaMesAtual() {
@@ -111,8 +94,6 @@ export default function LocaisEstoque({ usuario }) {
       {erro && <div className="card"><p style={{ color: 'var(--danger)' }}>{erro}</p></div>}
 
       <CadastroLocais />
-
-      <StatusOperacao locais={locais} />
 
       <div className="card">
         <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo calculado por local de estoque</p>
@@ -253,73 +234,6 @@ function CadastroLocais() {
             </label>
           </div>
         ))
-      )}
-    </div>
-  )
-}
-
-// "Tempo real" (pedido do Felipe) = atualiza sozinho a cada 20s, sem precisar dar F5. Pra cada
-// local: turno aberto (desde quando, período, vencido ou não) ou o último fechamento conhecido.
-function StatusOperacao({ locais }) {
-  const [abertos, setAbertos] = useState([])
-  const [ultimoFechadoPorLocal, setUltimoFechadoPorLocal] = useState({})
-  const [carregando, setCarregando] = useState(true)
-
-  useEffect(() => {
-    let cancelado = false
-    async function carregar() {
-      try {
-        const ab = await listarTurnosAbertos()
-        if (cancelado) return
-        setAbertos(ab)
-
-        const idsComAberto = new Set(ab.map((t) => t.local_estoque_id))
-        const semAberto = locais.filter((l) => !idsComAberto.has(l.id))
-        const historicos = await Promise.all(semAberto.map((l) => listarTurnosHistorico(l.id, 1)))
-        if (cancelado) return
-        const mapa = {}
-        semAberto.forEach((l, i) => { mapa[l.id] = historicos[i][0] || null })
-        setUltimoFechadoPorLocal(mapa)
-      } catch { /* não trava o resto da tela por causa disso */ } finally {
-        if (!cancelado) setCarregando(false)
-      }
-    }
-    carregar()
-    const intervalo = setInterval(carregar, INTERVALO_ATUALIZACAO_MS)
-    return () => { cancelado = true; clearInterval(intervalo) }
-  }, [locais])
-
-  if (!locais.length) return null
-
-  const abertoPorLocal = Object.fromEntries(abertos.map((t) => [t.local_estoque_id, t]))
-
-  return (
-    <div className="card">
-      <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Status da operação</p>
-      <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>Atualiza sozinho — cada local abre/fecha em "Abrir/Fechar operação", no app.</p>
-      {carregando ? <p className="muted">Carregando…</p> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {locais.map((l) => {
-            const turno = abertoPorLocal[l.id]
-            const vencido = turno && turnoVencido(turno)
-            const ultimoFechado = ultimoFechadoPorLocal[l.id]
-            return (
-              <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '0.5px solid var(--border)' }}>
-                <span style={{ fontWeight: 500 }}>{l.nome}</span>
-                {turno ? (
-                  <span style={{ fontSize: 12.5, textAlign: 'right', color: vencido ? 'var(--danger)' : 'var(--success)' }}>
-                    {vencido ? 'Vencida' : 'Aberta'} {faz(turno.aberto_em)} ({LABEL_PERIODO[periodoDoTurno(turno.aberto_em)]})
-                    {turno.aberto_por ? ` · ${turno.aberto_por}` : ''}
-                  </span>
-                ) : ultimoFechado ? (
-                  <span className="muted" style={{ fontSize: 12.5, textAlign: 'right' }}>Fechada · última vez {faz(ultimoFechado.fechado_em || ultimoFechado.aberto_em)}</span>
-                ) : (
-                  <span className="muted" style={{ fontSize: 12.5, textAlign: 'right' }}>Nunca aberta</span>
-                )}
-              </div>
-            )
-          })}
-        </div>
       )}
     </div>
   )
