@@ -76,6 +76,11 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
   const [tela, setTela] = useState('painel') // 'painel' | 'abrir' | 'planejar' | 'processo'
   const [processoRaizId, setProcessoRaizId] = useState(null)
   const [prefill, setPrefill] = useState(null) // { localEstoqueId, planejadaId, metaCodigoEverest, metaQuantidade } — só pra "Iniciar" numa planejada
+  // Incrementar isso força o React a remontar FormAbrir/FormPlanejar do zero (via `key`) — é o
+  // "Limpar" do ícone no cabeçalho (08/10/2026, "quero todos com isso", mesma lixeira/avião de
+  // Perdas e Contagem). Sem sessão salva aqui pra excluir de verdade — só limpa o que a pessoa
+  // ainda não enviou, sem confirmação (diferente do excluir de sessão, que apaga dado real).
+  const [formKey, setFormKey] = useState(0)
 
   const carregar = useCallback(async (silencioso = false) => {
     try {
@@ -122,6 +127,9 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
             : 'acompanhar a produção'
         }
         onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); setPrefill(null); carregar() }}
+        acoes={(tela === 'abrir' || tela === 'planejar') ? [
+          { icone: 'trash', aria: 'Limpar', cor: 'var(--danger)', onClick: () => setFormKey((k) => k + 1) }
+        ] : []}
       />
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
@@ -208,6 +216,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
       {tela === 'planejar' && (
         <FormPlanejar
+          key={formKey}
           usuario={usuarioLogado?.nome}
           onPronto={async () => { await carregar(); setTela('painel') }}
         />
@@ -215,6 +224,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
       {tela === 'abrir' && (
         <FormAbrir
+          key={formKey}
           usuario={usuarioLogado?.nome}
           localPadraoId={usuarioLogado?.localPadraoId}
           prefill={prefill}

@@ -82,9 +82,25 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
   const localAtual = locais.find((l) => l.id === localEstoqueId)
 
+  // Ícone de lixeira no cabeçalho (08/10/2026, "quero todos com isso" — mesma cara de Perdas e
+  // Contagem): aqui não existe sessão salva pra excluir de verdade, só limpa o que a pessoa ainda
+  // não enviou — por isso sem popup de confirmação (diferente do excluir que apaga dado real).
+  function limpar() {
+    setFornecedor('')
+    setNumeroNota('')
+    setProduto(null)
+    setQuantidade('')
+    setParecido(null)
+    setErro('')
+  }
+
   return (
     <div className="screen">
-      <Topbar titulo="Recebimento de Mercadoria" onVoltar={onSair} />
+      <Topbar
+        titulo="Recebimento de Mercadoria"
+        onVoltar={onSair}
+        acoes={[{ icone: 'trash', aria: 'Limpar', cor: 'var(--danger)', onClick: limpar }]}
+      />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <ContextoLancamento
