@@ -147,16 +147,20 @@ function SecaoLojas() {
     const dados = {
       nome: campo === 'nome' ? valor.trim() : unidade.nome,
       cnpj: campo === 'cnpj' ? valor : unidade.cnpj,
-      codigoDeposito: campo === 'codigo_deposito' ? valor : unidade.codigo_deposito
+      codigoDeposito: campo === 'codigo_deposito' ? valor : unidade.codigo_deposito,
+      ativo: campo === 'ativo' ? valor : unidade.ativo
     }
     await atualizarUnidade(unidade.id, dados)
-    setUnidades((prev) => prev.map((u) => (u.id === unidade.id ? { ...u, nome: dados.nome, cnpj: dados.cnpj, codigo_deposito: dados.codigoDeposito } : u)))
+    setUnidades((prev) => prev.map((u) => (u.id === unidade.id ? { ...u, nome: dados.nome, cnpj: dados.cnpj, codigo_deposito: dados.codigoDeposito, ativo: dados.ativo } : u)))
   }
 
   return (
     <div>
       <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 17 }}>{rotulos.loja}s</p>
-      <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>Entidade com CNPJ — usada na exportação contábil e no cadastro de pessoas.</p>
+      <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+        Entidade com CNPJ — usada na exportação contábil e no cadastro de pessoas. Não dá pra excluir
+        (o histórico de lançamentos depende dela) — desmarque "ativo" pra tirar das listas sem apagar nada.
+      </p>
 
       <div className="card" style={{ marginBottom: 14 }}>
         <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Nova {rotulos.loja.toLowerCase()}</p>
@@ -199,11 +203,17 @@ function SecaoLojas() {
         ) : (
           unidades.map((u) => (
             <div key={u.id} className="list-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-              <input
-                defaultValue={u.nome}
-                onBlur={(e) => handleAtualizarCampo(u, 'nome', e.target.value)}
-                style={{ fontWeight: 600, fontSize: 14.5, border: 'none', background: 'none', padding: 0 }}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input
+                  defaultValue={u.nome}
+                  onBlur={(e) => handleAtualizarCampo(u, 'nome', e.target.value)}
+                  style={{ flex: 1, fontWeight: 600, fontSize: 14.5, border: 'none', background: 'none', padding: 0 }}
+                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, flexShrink: 0 }} className="muted">
+                  <input type="checkbox" checked={u.ativo} onChange={(e) => handleAtualizarCampo(u, 'ativo', e.target.checked)} />
+                  ativo
+                </label>
+              </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
                   defaultValue={u.cnpj || ''}
@@ -276,7 +286,9 @@ function SecaoSetores() {
       <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 17 }}>{rotulos.setor}es</p>
       <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
         Área operacional onde se produz/estoca (Confeitaria, Produção, Serviço Dalva…) — é de onde
-        Perdas, Produção, Recebimento e Abrir/Fechar praça puxam o local do lançamento.
+        Perdas, Produção, Recebimento e Abrir/Fechar praça puxam o local do lançamento. Não dá pra
+        excluir (o histórico de lançamentos depende dele) — desmarque "ativo" pra tirar das listas
+        sem apagar nada.
       </p>
 
       <div className="card" style={{ marginBottom: 14 }}>
