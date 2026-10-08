@@ -4,6 +4,7 @@ import Topbar from '../components/Topbar'
 import Modal from '../components/Modal'
 import Icon from '../components/Icon'
 import TrocarLocalModal from '../components/TrocarLocalModal'
+import ContextoLancamento from '../components/ContextoLancamento'
 import { MOTIVOS_PERDA, CATEGORIAS_PERDA, LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../lib/perdas'
 import {
   registrarItemContagem,
@@ -244,34 +245,29 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade: unidadeInic
           { icone: 'trash', aria: 'Excluir', cor: 'var(--danger)', onClick: () => setConfirmandoExclusao(true) },
           { icone: 'send', aria: 'Enviar', onClick: () => setConfirmandoEnvio(true) }
         ]}
-        subtitulo={(
-          <div>
-            <p style={{ margin: 0 }}>
-              <button
-                type="button"
-                onClick={() => setTrocandoSetor(true)}
-                style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
-              >
-                {unidade?.nome || 'sem loja'} · {local?.nome || 'sem setor'}
-              </button>
-              {' · '}
-              {sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : '—'} {LABEL_TURNO[sessao.turno]}
-              {' '}
-              <button
-                type="button"
-                onClick={() => {
-                  setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
-                  setTurnoEditado(sessao.turno || 'almoco')
-                  setErroQuando('')
-                  setEditandoQuando(true)
-                }}
-                style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
-              >
-                alterar
-              </button>
-            </p>
-            <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>{usuarioLogado?.nome}</p>
-          </div>
+      />
+
+      <ContextoLancamento
+        unidade={unidade}
+        local={local}
+        usuario={usuarioLogado?.nome}
+        onTrocar={() => setTrocandoSetor(true)}
+        extra={(
+          <>
+            {sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : '—'} {LABEL_TURNO[sessao.turno]}{' '}
+            <button
+              type="button"
+              onClick={() => {
+                setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
+                setTurnoEditado(sessao.turno || 'almoco')
+                setErroQuando('')
+                setEditandoQuando(true)
+              }}
+              style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
+            >
+              alterar
+            </button>
+          </>
         )}
       />
 

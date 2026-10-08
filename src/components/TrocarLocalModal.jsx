@@ -8,7 +8,12 @@ import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 // padrão pra tudo e todos, assim conseguimos manter uma base certa pra cruzar os dados"). Sempre
 // em 2 passos — escolher, depois confirmar — porque trocar daqui vale só aquele lançamento, nunca
 // o cadastro da pessoa, e isso precisa ficar claro antes de valer.
-export default function TrocarLocalModal({ unidadeAtualId, localAtualId, onFechar, onConfirmar }) {
+//
+// `mostrarLoja` (08/10/2026, "não está tudo com a mesma cara"): Produção não guarda Loja nenhuma
+// (só Setor, via `producoes.local_estoque_id`) — mostrar o campo ali seria inventar um dado que
+// não existe. A interação (tocar → confirmar) é a mesma em todo canto; os campos mostrados é que
+// seguem o que cada lançamento de fato guarda.
+export default function TrocarLocalModal({ unidadeAtualId, localAtualId, onFechar, onConfirmar, mostrarLoja = true }) {
   const [unidadeId, setUnidadeId] = useState(unidadeAtualId || '')
   const [localEstoqueId, setLocalEstoqueId] = useState(localAtualId || '')
   const [unidades, setUnidades] = useState([])
@@ -19,11 +24,11 @@ export default function TrocarLocalModal({ unidadeAtualId, localAtualId, onFecha
   const [erro, setErro] = useState('')
 
   useEffect(() => {
-    Promise.all([listarUnidades(), listarLocaisEstoque()])
+    Promise.all([mostrarLoja ? listarUnidades() : Promise.resolve([]), listarLocaisEstoque()])
       .then(([u, l]) => { setUnidades(u); setLocais(l) })
       .catch((e) => setErro(e.message))
       .finally(() => setCarregando(false))
-  }, [])
+  }, [mostrarLoja])
 
   async function confirmar() {
     setSalvando(true)
@@ -41,7 +46,7 @@ export default function TrocarLocalModal({ unidadeAtualId, localAtualId, onFecha
     }
   }
 
-  const mudou = unidadeId !== (unidadeAtualId || '') || localEstoqueId !== (localAtualId || '')
+  const mudou = (mostrarLoja && unidadeId !== (unidadeAtualId || '')) || localEstoqueId !== (localAtualId || '')
 
   return (
     <Modal onFechar={() => !salvando && onFechar()} largura={360}>
@@ -49,17 +54,19 @@ export default function TrocarLocalModal({ unidadeAtualId, localAtualId, onFecha
         <p className="muted">Carregando…</p>
       ) : !confirmando ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Trocar loja/setor</p>
+          <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>{mostrarLoja ? 'Trocar loja/setor' : 'Trocar setor'}</p>
           <p className="muted" style={{ margin: 0, fontSize: 12 }}>
             Vale só pra esse lançamento — da próxima vez volta a sugerir o padrão do seu cadastro.
           </p>
-          <div>
-            <label className="muted">Loja</label>
-            <select value={unidadeId} onChange={(e) => setUnidadeId(e.target.value)}>
-              <option value="">Sem loja</option>
-              {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
-            </select>
-          </div>
+          {mostrarLoja && (
+            <div>
+              <label className="muted">Loja</label>
+              <select value={unidadeId} onChange={(e) => setUnidadeId(e.target.value)}>
+                <option value="">Sem loja</option>
+                {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="muted">Setor</label>
             <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
@@ -77,7 +84,8 @@ export default function TrocarLocalModal({ unidadeAtualId, localAtualId, onFecha
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Confirma a troca?</p>
           <p className="muted" style={{ margin: 0 }}>
-            {unidades.find((u) => u.id === unidadeId)?.nome || 'sem loja'} · {locais.find((l) => l.id === localEstoqueId)?.nome || 'sem setor'}
+            {mostrarLoja ? `${unidades.find((u) => u.id === unidadeId)?.nome || 'sem loja'} · ` : ''}
+            {locais.find((l) => l.id === localEstoqueId)?.nome || 'sem setor'}
           </p>
           {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erro}</p>}
           <div style={{ display: 'flex', gap: 8 }}>

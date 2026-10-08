@@ -3,6 +3,8 @@ import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import Topbar from '../components/Topbar'
 import Modal from '../components/Modal'
 import Icon from '../components/Icon'
+import TrocarLocalModal from '../components/TrocarLocalModal'
+import ContextoLancamento from '../components/ContextoLancamento'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarFatoresCorrecao, calcularFCTeorico, filhosDiretos, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
@@ -311,11 +313,12 @@ function FormPlanejar({ usuario, onPronto }) {
 function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
   const [data, setData] = useState(hojeIso())
   const [locais, setLocais] = useState([])
-  // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): quem tem Setor
-  // padrão vinculado já entra com o local certo escolhido — ainda dá pra trocar no próprio select,
-  // sem popup de confirmação (diferente de Perdas: aqui é escolha de uma vez só, não um cabeçalho
-  // de sessão em andamento).
+  // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos" + "não está tudo com
+  // a mesma cara"): quem tem Setor padrão vinculado já entra com o local certo — trocar usa o
+  // mesmo popup com confirmação de Perdas (ver TrocarLocalModal), só sem o campo Loja (Produção
+  // não guarda isso).
   const [localEstoqueId, setLocalEstoqueId] = useState(prefill?.localEstoqueId || localPadraoId || '')
+  const [trocandoSetor, setTrocandoSetor] = useState(false)
   const [categoria, setCategoria] = useState(CATEGORIAS[0])
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
@@ -351,9 +354,22 @@ function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
     }
   }
 
+  const localAtual = locais.find((l) => l.id === localEstoqueId)
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>{prefill?.planejadaId ? 'Iniciar planejada' : 'Nova produção'}</p>
+
+      {!prefill?.planejadaId && (
+        <ContextoLancamento
+          mostrarLoja={false}
+          local={localAtual}
+          usuario={usuario}
+          onTrocar={() => setTrocandoSetor(true)}
+          extra={`data ${data.split('-').reverse().join('/')}`}
+        />
+      )}
+
       {prefill?.planejadaId && (
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
           Planejado: {prefill.metaQuantidade ? `${fmt(prefill.metaQuantidade)} ` : ''}{prefill.metaCodigoEverest}. Confirme o produto e pese o bruto de verdade.
@@ -364,14 +380,13 @@ function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
         <input type="date" value={data} onChange={(e) => setData(e.target.value)} />
       </div>
 
-      {!prefill?.planejadaId && (
-        <div>
-          <label className="muted">Local de estoque</label>
-          <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
-          </select>
-        </div>
+      {trocandoSetor && (
+        <TrocarLocalModal
+          mostrarLoja={false}
+          localAtualId={localEstoqueId}
+          onFechar={() => setTrocandoSetor(false)}
+          onConfirmar={(_, localNovo) => { setLocalEstoqueId(localNovo?.id || ''); setTrocandoSetor(false) }}
+        />
       )}
 
       {!produto ? (

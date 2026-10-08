@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from './BuscaProdutoPerda'
+import TrocarLocalModal from './TrocarLocalModal'
+import ContextoLancamento from './ContextoLancamento'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarRecebimentoParecido, criarRecebimento, excluirRecebimento } from '../lib/recebimentosApi'
@@ -20,6 +22,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
   // padrão vinculado já entra com o local certo — ainda dá pra trocar no select, é escolha de uma
   // vez só (não um cabeçalho de sessão, como Perdas).
   const [localEstoqueId, setLocalEstoqueId] = useState(localPadraoId || '')
+  const [trocandoSetor, setTrocandoSetor] = useState(false)
   const [fornecedor, setFornecedor] = useState('')
   const [numeroNota, setNumeroNota] = useState('')
   const [produto, setProduto] = useState(null)
@@ -76,20 +79,28 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
   const pronto = localEstoqueId && fornecedor.trim().length >= 2 && produto && qtd > 0
 
+  const localAtual = locais.find((l) => l.id === localEstoqueId)
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Recebimento de mercadoria</p>
-        <span className="muted" style={{ fontSize: 11.5 }}>{agora()}</span>
-      </div>
+      <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Recebimento de mercadoria</p>
 
-      <div>
-        <label className="muted">Local de estoque</label>
-        <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
-          <option value="">Selecione…</option>
-          {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
-        </select>
-      </div>
+      <ContextoLancamento
+        mostrarLoja={false}
+        local={localAtual}
+        usuario={usuario}
+        onTrocar={() => setTrocandoSetor(true)}
+        extra={agora()}
+      />
+
+      {trocandoSetor && (
+        <TrocarLocalModal
+          mostrarLoja={false}
+          localAtualId={localEstoqueId}
+          onFechar={() => setTrocandoSetor(false)}
+          onConfirmar={(_, localNovo) => { setLocalEstoqueId(localNovo?.id || ''); setTrocandoSetor(false) }}
+        />
+      )}
 
       <div>
         <label className="muted">Fornecedor</label>
