@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
 import Icon from '../components/Icon'
-import Modal from '../components/Modal'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
@@ -29,9 +28,12 @@ function fmt(n, casas = 3) {
   return x.toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas })
 }
 
-export default function TelaRequisicao({ usuarioLogado, onSair }) {
-  const [aba, setAba] = useState('pendentes') // 'pendentes' | 'historico'
-  const [modalNova, setModalNova] = useState(false) // popup, não troca de aba
+export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = false }) {
+  // 08/10/2026 (pedido do Felipe, simulação de fluxo): "Nova" tinha virado popup dentro do popup
+  // (TelaRequisicao já é um popup da Home) — voltou a ser troca de conteúdo no MESMO popup, como
+  // "processo" já funciona em Produção. `iniciarEmNova` é só pro atalho de "Abrir praça → Sim, vou
+  // levar item" (TelaOperacao.jsx) cair direto no formulário, sem precisar achar o botão.
+  const [aba, setAba] = useState(iniciarEmNova ? 'nova' : 'pendentes') // 'nova' | 'pendentes' | 'historico'
   const [tipo, setTipo] = useState('requisicao') // 'requisicao' | 'transferencia'
   const [locais, setLocais] = useState([])
   const [pendentesReq, setPendentesReq] = useState([])
@@ -60,55 +62,57 @@ export default function TelaRequisicao({ usuarioLogado, onSair }) {
 
   return (
     <div className="screen">
-      <Topbar titulo="Requisição / Transferência" subtitulo="pedir e mandar material entre locais de estoque" onVoltar={onSair} />
+      <Topbar
+        titulo="Requisição / Transferência"
+        subtitulo={aba === 'nova' ? 'nova requisição ou transferência' : 'pedir e mandar material entre locais de estoque'}
+        onVoltar={aba === 'nova' ? () => setAba('pendentes') : onSair}
+      />
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
 
-      <button className="primary" onClick={() => setModalNova(true)} style={{ width: '100%', padding: 16, fontSize: 16, marginBottom: 14 }}>
-        + Nova requisição/transferência
-      </button>
-
-      <div className="segmented" style={{ marginBottom: 14 }}>
-        <button onClick={() => setAba('pendentes')} className={aba === 'pendentes' ? 'active' : ''}>
-          Pendentes{(pendentesReq.length + pendentesTransf.length) > 0 ? ` (${pendentesReq.length + pendentesTransf.length})` : ''}
-        </button>
-        <button onClick={() => setAba('historico')} className={aba === 'historico' ? 'active' : ''}>Histórico</button>
-      </div>
-
-      {carregando ? <p className="muted">Carregando…</p> : (
+      {aba === 'nova' ? (
+        // Não fecha/volta sozinho ao enviar — fica aqui pra lançar vários seguidos, só atualiza
+        // pendentes/histórico por baixo. "Voltar" (Topbar acima) é que leva pra lista.
+        <FormNova
+          locais={locais} tipo={tipo} setTipo={setTipo}
+          usuario={usuarioLogado?.nome}
+          onPronto={carregar}
+        />
+      ) : (
         <>
-          {aba === 'pendentes' && (
-            <Pendentes
-              pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
-              usuario={usuarioLogado?.nome} usuarioLogado={usuarioLogado}
-              onMudou={carregar} onErro={setErro}
-            />
-          )}
+          <button className="primary" onClick={() => setAba('nova')} style={{ width: '100%', padding: 16, fontSize: 16, marginBottom: 14 }}>
+            + Nova requisição/transferência
+          </button>
 
-          {aba === 'historico' && (
-            <Historico historicoReq={historicoReq} historicoTransf={historicoTransf} />
+          <div className="segmented" style={{ marginBottom: 14 }}>
+            <button onClick={() => setAba('pendentes')} className={aba === 'pendentes' ? 'active' : ''}>
+              Pendentes{(pendentesReq.length + pendentesTransf.length) > 0 ? ` (${pendentesReq.length + pendentesTransf.length})` : ''}
+            </button>
+            <button onClick={() => setAba('historico')} className={aba === 'historico' ? 'active' : ''}>Histórico</button>
+          </div>
+
+          {carregando ? <p className="muted">Carregando…</p> : (
+            <>
+              {aba === 'pendentes' && (
+                <Pendentes
+                  pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
+                  usuario={usuarioLogado?.nome} usuarioLogado={usuarioLogado}
+                  onMudou={carregar} onErro={setErro}
+                />
+              )}
+
+              {aba === 'historico' && (
+                <Historico historicoReq={historicoReq} historicoTransf={historicoTransf} />
+              )}
+            </>
           )}
         </>
-      )}
-
-      {modalNova && (
-        <Modal onFechar={() => setModalNova(false)} largura={420}>
-          {/* Não fecha sozinho ao enviar — fica aberto pra lançar vários seguidos (já era assim
-              quando "Nova" era uma aba fixa), só atualiza pendentes/histórico por baixo. Fecha com
-              ESC, clicando fora, ou o "Fechar" do próprio formulário. */}
-          <FormNova
-            locais={locais} tipo={tipo} setTipo={setTipo}
-            usuario={usuarioLogado?.nome}
-            onPronto={carregar}
-            onFechar={() => setModalNova(false)}
-          />
-        </Modal>
       )}
     </div>
   )
 }
 
-function FormNova({ locais, tipo, setTipo, usuario, onPronto, onFechar }) {
+function FormNova({ locais, tipo, setTipo, usuario, onPronto }) {
   const [origemId, setOrigemId] = useState('')
   const [destinoId, setDestinoId] = useState('')
   const [produto, setProduto] = useState(null)
@@ -163,10 +167,6 @@ function FormNova({ locais, tipo, setTipo, usuario, onPronto, onFechar }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Nova</p>
-        <button type="button" className="ghost" onClick={onFechar}>Fechar</button>
-      </div>
       <div className="segmented">
         <button onClick={() => setTipo('requisicao')} className={tipo === 'requisicao' ? 'active' : ''}>Requisição</button>
         <button onClick={() => setTipo('transferencia')} className={tipo === 'transferencia' ? 'active' : ''}>Transferência</button>

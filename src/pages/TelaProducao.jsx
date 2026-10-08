@@ -68,8 +68,11 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
   const [planejadas, setPlanejadas] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
-  const [tela, setTela] = useState('painel') // 'painel' | 'processo'
-  const [modal, setModal] = useState(null) // null | 'abrir' | 'planejar' — popup sobre o painel, não troca de tela
+  // 08/10/2026 (pedido do Felipe, simulação de fluxo): "abrir"/"planejar" tinham virado popup
+  // dentro do popup (TelaProducao já é um popup da Home) — duas camadas de blur empilhadas, e
+  // fechar exigia dois toques. Voltou a ser troca de conteúdo DENTRO do mesmo popup, como "processo"
+  // já era — só um popup por vez, "voltar" sempre leva pro painel.
+  const [tela, setTela] = useState('painel') // 'painel' | 'abrir' | 'planejar' | 'processo'
   const [processoRaizId, setProcessoRaizId] = useState(null)
   const [prefill, setPrefill] = useState(null) // { localEstoqueId, planejadaId, metaCodigoEverest, metaQuantidade } — só pra "Iniciar" numa planejada
 
@@ -95,7 +98,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
   function iniciarPlanejada(p) {
     setPrefill({ localEstoqueId: p.local_estoque_id, planejadaId: p.id, metaCodigoEverest: p.meta_codigo_everest, metaQuantidade: p.meta_quantidade })
-    setModal('abrir')
+    setTela('abrir')
   }
 
   async function cancelarPlanejada(p) {
@@ -111,8 +114,13 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
     <div className="screen">
       <Topbar
         titulo="Produção"
-        subtitulo={tela === 'painel' ? 'o que está sendo produzido' : 'acompanhar a produção'}
-        onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); carregar() }}
+        subtitulo={
+          tela === 'painel' ? 'o que está sendo produzido'
+            : tela === 'abrir' ? 'nova produção'
+            : tela === 'planejar' ? 'planejar o que falta produzir'
+            : 'acompanhar a produção'
+        }
+        onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); setPrefill(null); carregar() }}
       />
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
@@ -120,10 +128,10 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
       {tela === 'painel' && (
         <>
           <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-            <button className="primary" onClick={() => { setPrefill(null); setModal('abrir') }} style={{ flex: 1, padding: 16, fontSize: 16 }}>
+            <button className="primary" onClick={() => { setPrefill(null); setTela('abrir') }} style={{ flex: 1, padding: 16, fontSize: 16 }}>
               Iniciar produção
             </button>
-            <button onClick={() => setModal('planejar')} style={{ padding: 16, fontSize: 16 }}>
+            <button onClick={() => setTela('planejar')} style={{ padding: 16, fontSize: 16 }}>
               + Planejar
             </button>
           </div>
@@ -197,23 +205,19 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
         </>
       )}
 
-      {modal === 'planejar' && (
-        <Modal onFechar={() => setModal(null)} largura={420}>
-          <FormPlanejar
-            usuario={usuarioLogado?.nome}
-            onPronto={async () => { await carregar(); setModal(null) }}
-          />
-        </Modal>
+      {tela === 'planejar' && (
+        <FormPlanejar
+          usuario={usuarioLogado?.nome}
+          onPronto={async () => { await carregar(); setTela('painel') }}
+        />
       )}
 
-      {modal === 'abrir' && (
-        <Modal onFechar={() => { setModal(null); setPrefill(null) }} largura={420}>
-          <FormAbrir
-            usuario={usuarioLogado?.nome}
-            prefill={prefill}
-            onPronto={async () => { await carregar(); setModal(null); setPrefill(null) }}
-          />
-        </Modal>
+      {tela === 'abrir' && (
+        <FormAbrir
+          usuario={usuarioLogado?.nome}
+          prefill={prefill}
+          onPronto={async () => { await carregar(); setTela('painel'); setPrefill(null) }}
+        />
       )}
 
       {tela === 'processo' && processoRaizId && (

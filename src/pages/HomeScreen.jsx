@@ -46,6 +46,9 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
   const [erroRecebimento, setErroRecebimento] = useState('')
 
   const [telaAberta, setTelaAberta] = useState(null) // null | 'producao' | 'requisicao' | 'operacao'
+  // true só quando vem do "Sim" de Abrir/Fechar praça (ver tiles.operacao abaixo) — cai direto no
+  // formulário de nova requisição/transferência em vez de pousar em "Pendentes".
+  const [requisicaoIniciarEmNova, setRequisicaoIniciarEmNova] = useState(false)
 
   // Bolinha do tile "Abrir/Fechar praça" (07/10/2026, pedido do Felipe) — só pra quem tem local
   // padrão vinculado (ver migration_v24.sql); sem vínculo, o tile fica neutro (escolhe livremente
@@ -97,7 +100,7 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
       icone: 'arrows-exchange',
       cor: 'var(--dom-marinho)',
       label: 'Requisição / Transferência',
-      onClick: () => setTelaAberta('requisicao'),
+      onClick: () => { setRequisicaoIniciarEmNova(false); setTelaAberta('requisicao') },
       visivel: podeVer(usuarioLogado, 'contagens.lancar')
     },
     {
@@ -216,12 +219,16 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
       )}
       {telaAberta === 'requisicao' && (
         <Modal onFechar={() => setTelaAberta(null)} largura={440}>
-          <TelaRequisicao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} />
+          <TelaRequisicao usuarioLogado={usuarioLogado} onSair={() => setTelaAberta(null)} iniciarEmNova={requisicaoIniciarEmNova} />
         </Modal>
       )}
       {telaAberta === 'operacao' && (
         <Modal onFechar={fecharOperacao} largura={440}>
-          <TelaOperacao usuarioLogado={usuarioLogado} onSair={fecharOperacao} onAbrirRequisicao={() => setTelaAberta('requisicao')} />
+          <TelaOperacao
+            usuarioLogado={usuarioLogado}
+            onSair={fecharOperacao}
+            onAbrirRequisicao={() => { setRequisicaoIniciarEmNova(true); setTelaAberta('requisicao') }}
+          />
         </Modal>
       )}
 
