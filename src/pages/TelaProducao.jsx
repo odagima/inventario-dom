@@ -358,11 +358,9 @@ function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
 
       {!prefill?.planejadaId && (
         <ContextoLancamento
-          mostrarLoja={false}
-          local={localAtual}
+          setor={localAtual?.nome || 'sem setor'}
           usuario={usuario}
-          onTrocar={() => setTrocandoSetor(true)}
-          extra={`data ${data.split('-').reverse().join('/')}`}
+          onTrocarSetor={() => setTrocandoSetor(true)}
         />
       )}
 

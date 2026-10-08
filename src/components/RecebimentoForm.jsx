@@ -86,11 +86,10 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
       <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Recebimento de mercadoria</p>
 
       <ContextoLancamento
-        mostrarLoja={false}
-        local={localAtual}
+        setor={localAtual?.nome || 'sem setor'}
+        data={agora()}
         usuario={usuario}
-        onTrocar={() => setTrocandoSetor(true)}
-        extra={agora()}
+        onTrocarSetor={() => setTrocandoSetor(true)}
       />
 
       {trocandoSetor && (

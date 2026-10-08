@@ -248,27 +248,24 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade: unidadeInic
       />
 
       <ContextoLancamento
-        unidade={unidade}
-        local={local}
+        loja={unidade?.nome || 'sem loja'}
+        setor={local?.nome || 'sem setor'}
+        data={sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : '—'}
+        turno={LABEL_TURNO[sessao.turno]}
         usuario={usuarioLogado?.nome}
-        onTrocar={() => setTrocandoSetor(true)}
-        extra={(
-          <>
-            {sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : '—'} {LABEL_TURNO[sessao.turno]}{' '}
-            <button
-              type="button"
-              onClick={() => {
-                setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
-                setTurnoEditado(sessao.turno || 'almoco')
-                setErroQuando('')
-                setEditandoQuando(true)
-              }}
-              style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
-            >
-              alterar
-            </button>
-          </>
-        )}
+        onTrocarSetor={() => setTrocandoSetor(true)}
+        onTrocarTurno={() => {
+          setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
+          setTurnoEditado(sessao.turno || 'almoco')
+          setErroQuando('')
+          setEditandoQuando(true)
+        }}
+        onTrocarData={() => {
+          setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
+          setTurnoEditado(sessao.turno || 'almoco')
+          setErroQuando('')
+          setEditandoQuando(true)
+        }}
       />
 
       {/* Aviso permanente, não é um toast que some. §55: se o time achar que a perda já sai do
@@ -283,38 +280,40 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade: unidadeInic
       </div>
 
       {editandoQuando && (
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
-          <p style={{ margin: 0, fontWeight: 600 }}>Quando foi essa perda?</p>
-          <div>
-            <label className="muted">Data do ocorrido</label>
-            <input type="date" value={dataEditada} onChange={(e) => setDataEditada(e.target.value)} />
-          </div>
-          <div>
-            <label className="muted">Turno</label>
-            <div className="segmented" style={{ marginTop: 4 }}>
-              {Object.entries(LABEL_TURNO).map(([valor, label]) => (
-                <button
-                  key={valor}
-                  type="button"
-                  onClick={() => setTurnoEditado(valor)}
-                  className={turnoEditado === valor ? 'active' : ''}
-                >
-                  {label}
-                </button>
-              ))}
+        <Modal onFechar={() => !salvandoQuando && setEditandoQuando(false)} largura={340}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Quando foi essa perda?</p>
+            <div>
+              <label className="muted">Data do ocorrido</label>
+              <input type="date" value={dataEditada} onChange={(e) => setDataEditada(e.target.value)} />
+            </div>
+            <div>
+              <label className="muted">Turno</label>
+              <div className="segmented" style={{ marginTop: 4 }}>
+                {Object.entries(LABEL_TURNO).map(([valor, label]) => (
+                  <button
+                    key={valor}
+                    type="button"
+                    onClick={() => setTurnoEditado(valor)}
+                    className={turnoEditado === valor ? 'active' : ''}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Vale pra tudo que já foi lançado nessa sessão — os itens continuam onde estão.
+            </p>
+            {erroQuando && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erroQuando}</p>}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setEditandoQuando(false)} disabled={salvandoQuando} style={{ flex: 1 }}>Cancelar</button>
+              <button className="primary" onClick={handleSalvarQuando} disabled={salvandoQuando} style={{ flex: 1 }}>
+                {salvandoQuando ? 'Salvando…' : 'Salvar'}
+              </button>
             </div>
           </div>
-          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-            Vale pra tudo que já foi lançado nessa sessão — os itens continuam onde estão.
-          </p>
-          {erroQuando && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erroQuando}</p>}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setEditandoQuando(false)} disabled={salvandoQuando} style={{ flex: 1 }}>Cancelar</button>
-            <button className="primary" onClick={handleSalvarQuando} disabled={salvandoQuando} style={{ flex: 1 }}>
-              {salvandoQuando ? 'Salvando…' : 'Salvar'}
-            </button>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {trocandoSetor && (

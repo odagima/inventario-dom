@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
 import Modal from '../components/Modal'
+import ContextoLancamento from '../components/ContextoLancamento'
 import ScannerCodigoBarras from '../components/ScannerCodigoBarras'
 import ConversaoQuantidade from '../components/ConversaoQuantidade'
 import VincularProduto from '../components/VincularProduto'
@@ -40,7 +41,7 @@ function formatarQtd(qtd, unidade) {
   return n.toLocaleString('pt-BR', { maximumFractionDigits: 3 })
 }
 
-export default function TelaContagem({ sessao, unidade, grupo, onFinalizar, onSair }) {
+export default function TelaContagem({ sessao, unidade, grupo, usuarioLogado, onFinalizar, onSair }) {
   const [estado, setEstado] = useState('buscando')
   const [codigoAtual, setCodigoAtual] = useState('')
   const [produtoAtual, setProdutoAtual] = useState(null)
@@ -312,6 +313,11 @@ export default function TelaContagem({ sessao, unidade, grupo, onFinalizar, onSa
             )}
           </>
         )}
+      />
+
+      <ContextoLancamento
+        loja={unidade?.nome}
+        usuario={usuarioLogado?.nome}
       />
 
       {confirmandoEnvio && (

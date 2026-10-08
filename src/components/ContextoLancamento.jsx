@@ -1,27 +1,58 @@
 // Bloco padrão no topo de todo lançamento que puxa a base (Perdas, Produção, Recebimento —
-// 08/10/2026, pedido do Felipe: "não está tudo com a mesma cara... ajuste"). Sempre no mesmo
-// lugar (logo abaixo do Topbar), mesmo visual — só o que mostra muda com o que aquele lançamento
-// de fato guarda (`mostrarLoja`/`extra`).
-export default function ContextoLancamento({ unidade, local, extra, usuario, mostrarLoja = true, onTrocar }) {
+// pedido do Felipe, 2ª rodada: "o cabeçalho é isso mesmo, só precisa arrumar de um jeito que
+// fique bonito" + layout em grade dado por ele: Loja/Data numa linha, Setor sozinho embaixo,
+// Usuário/Turno na linha de baixo). Cada campo só aparece se a tela passar o valor — Produção e
+// Recebimento não têm Loja nem Turno, por exemplo.
+//
+// "Deixar disponível para alterar Loja, setor e turno (sem a palavra alterar)": o valor em si é o
+// botão — sem link "alterar" à parte. Só Loja/Setor abrem o mesmo popup (TrocarLocalModal, com
+// confirmação — são a mesma base padronizada); Turno e Data (quando a tela passa `onTrocarTurno`/
+// `onTrocarData`) abrem um popup simples de um passo só, sem confirmação extra.
+export default function ContextoLancamento({ loja, setor, data, turno, usuario, onTrocarSetor, onTrocarTurno, onTrocarData }) {
+  const linha1 = [
+    loja != null && { chave: 'loja', label: 'Loja', valor: loja, onClick: onTrocarSetor },
+    data != null && { chave: 'data', label: 'Data', valor: data, onClick: onTrocarData }
+  ].filter(Boolean)
+  const linha3 = [
+    usuario != null && { chave: 'usuario', label: 'Usuário', valor: usuario },
+    turno != null && { chave: 'turno', label: 'Turno', valor: turno, onClick: onTrocarTurno }
+  ].filter(Boolean)
+
   return (
-    <div
-      style={{
-        background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10,
-        padding: '10px 12px', marginBottom: 14, display: 'flex',
-        justifyContent: 'space-between', alignItems: 'center', gap: 10
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
+    <div className="card" style={{ marginBottom: 14, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {linha1.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          {linha1.map((c) => <Campo key={c.chave} {...c} />)}
+        </div>
+      )}
+      {setor != null && <Campo label="Setor" valor={setor} onClick={onTrocarSetor} destaque />}
+      {linha3.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          {linha3.map((c) => <Campo key={c.chave} {...c} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Campo({ label, valor, onClick, destaque }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <span className="muted" style={{ fontSize: 11.5 }}>{label}: </span>
+      {onClick ? (
         <button
           type="button"
-          onClick={onTrocar}
-          style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, fontWeight: 600, color: 'inherit', cursor: 'pointer' }}
+          onClick={onClick}
+          style={{
+            padding: 0, background: 'none', border: 'none', color: 'inherit', cursor: 'pointer',
+            textDecoration: 'underline', fontWeight: destaque ? 700 : 600, fontSize: destaque ? 14.5 : 13.5
+          }}
         >
-          {mostrarLoja ? `${unidade?.nome || 'sem loja'} · ` : ''}{local?.nome || 'sem setor'}
+          {valor}
         </button>
-        {extra && <span className="muted" style={{ fontSize: 13 }}> · {extra}</span>}
-      </div>
-      <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>{usuario}</span>
+      ) : (
+        <span style={{ fontWeight: destaque ? 700 : 600, fontSize: destaque ? 14.5 : 13.5 }}>{valor}</span>
+      )}
     </div>
   )
 }
