@@ -97,7 +97,7 @@ export default function TelaOperacao({ usuarioLogado, onSair, onAbrirRequisicao 
 
       {!acaoFeita && !localFixoId && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <label className="muted">Praça / local de estoque</label>
+          <label className="muted">Setor</label>
           <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
             <option value="">Selecione…</option>
             {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}

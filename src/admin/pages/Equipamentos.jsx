@@ -78,7 +78,7 @@ export default function Equipamentos() {
             <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Câmara fria 2" />
           </div>
           <div>
-            <label className="muted">Local onde está</label>
+            <label className="muted">Setor onde está</label>
             <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
               <option value="">Selecione…</option>
               {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
@@ -131,7 +131,7 @@ export default function Equipamentos() {
                   style={{ flex: 1, minWidth: 120, fontSize: 13 }}
                 />
               </div>
-              <p className="muted" style={{ margin: 0, fontSize: 11.5 }}>{eq.local?.nome || 'sem local vinculado'}</p>
+              <p className="muted" style={{ margin: 0, fontSize: 11.5 }}>{eq.local?.nome || 'sem setor vinculado'}</p>
             </div>
           ))
         )}

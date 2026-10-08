@@ -59,7 +59,7 @@ const AREAS = [
     ]
   },
   {
-    area: 'Pessoas',
+    area: 'Usuários',
     acoes: [
       { id: 'usuarios.ver', label: 'Ver usuários e perfis' },
       { id: 'usuarios.editar', label: 'Criar e alterar usuários e perfis' }
@@ -207,7 +207,7 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
       )}
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        {[{ id: 'pessoas', label: 'Pessoas' }, { id: 'perfis', label: 'Perfis' }].map((t) => (
+        {[{ id: 'pessoas', label: 'Usuários' }, { id: 'perfis', label: 'Perfis' }].map((t) => (
           <button
             key={t.id}
             className={aba === t.id ? '' : 'ghost'}
@@ -234,7 +234,7 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
             </label>
             {podeEditar && (
               <button onClick={() => { setNovoAberto((v) => !v); setEditando(null) }}>
-                {novoAberto ? 'Cancelar' : 'Nova pessoa'}
+                {novoAberto ? 'Cancelar' : 'Novo usuário'}
               </button>
             )}
           </div>
@@ -376,7 +376,7 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
                         {p.descricao && <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>{p.descricao}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
-                        <span className="muted" style={{ fontSize: 11 }}>{quantos} pessoa(s)</span>
+                        <span className="muted" style={{ fontSize: 11 }}>{quantos} usuário(s)</span>
                         {podeEditar && !p.eh_desenvolvedor && (
                           <button
                             className="ghost"
@@ -422,7 +422,7 @@ function NovaPessoa({ perfis, unidades, onSalvar }) {
   const pinValido = /^[0-9]{4}$/.test(pin)
   return (
     <div style={card}>
-      <p style={{ ...rotulo, margin: '0 0 10px' }} className="muted">Nova pessoa</p>
+      <p style={{ ...rotulo, margin: '0 0 10px' }} className="muted">Novo usuário</p>
       <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
         <input placeholder="Nome completo" value={nome} onChange={(e) => setNome(e.target.value)} />
         <input

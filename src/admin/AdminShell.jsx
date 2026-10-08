@@ -4,7 +4,7 @@ import Lancamentos from './pages/Lancamentos'
 import Dashboard from './pages/Dashboard'
 import Relatorio from './pages/Relatorio'
 import ImportarHistorico from './pages/ImportarHistorico'
-import Unidades from './pages/Unidades'
+import LojasSetores from './pages/LojasSetores'
 import Reset from './pages/Reset'
 import ConfiguracaoMensal from './pages/ConfiguracaoMensal'
 import Siglas from './pages/Siglas'
@@ -105,7 +105,7 @@ const MODULOS = [
     titulo: 'Produção',
     abas: [
       { id: 'prod_analise', label: 'Análise / Dashboard', perm: 'custos.ver' },
-      { id: 'prod_locais', label: 'Locais de estoque e saldo calculado', perm: 'custos.ver' },
+      { id: 'prod_locais', label: 'Saldo calculado por setor', perm: 'custos.ver' },
       { id: 'prod_historico', label: 'Histórico', perm: 'contagens.ver' },
       { id: 'prod_exportar', label: 'Exportar / Importar', perm: 'contagens.ver' }
     ]
@@ -125,6 +125,7 @@ const MODULOS = [
   {
     titulo: 'Base de dados',
     abas: [
+      { id: 'base_lojas_setores', label: 'Lojas e Setores', perm: 'cadastros.ver' },
       { id: 'base_produtos', label: 'Produtos', perm: 'cadastros.ver' },
       { id: 'base_lancamentos', label: 'Lançamentos', perm: 'contagens.ver' },
       { id: 'base_arvore', label: 'Árvore de transformação', perm: 'cadastros.ver' },
@@ -144,7 +145,6 @@ const MODULOS = [
     titulo: 'Configuração',
     abas: [
       { id: 'cfg_mes', label: 'Mês ativo', perm: 'cadastros.editar' },
-      { id: 'cfg_lojas', label: 'Lojas', perm: 'cadastros.editar' },
       { id: 'cfg_siglas', label: 'Siglas', perm: 'cadastros.editar' },
       // Rótulo igual ao original ("Usuários"); aponta pra `UsuariosPerfis` (§67), não mais pra
       // `Usuarios.jsx` antiga.
@@ -306,6 +306,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
           {aba === 'card_margem' && <Cardapio />}
 
           {/* ── BASE DE DADOS ── */}
+          {aba === 'base_lojas_setores' && <LojasSetores />}
           {aba === 'base_produtos' && <BaseProdutos />}
           {aba === 'base_lancamentos' && <Lancamentos />}
           {aba === 'base_arvore' && <ArvoreTransformacao />}
@@ -322,7 +323,6 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
 
           {/* ── CONFIGURAÇÃO ── */}
           {aba === 'cfg_mes' && <ConfiguracaoMensal />}
-          {aba === 'cfg_lojas' && <Unidades />}
           {aba === 'cfg_siglas' && <Siglas />}
           {aba === 'cfg_usuarios' && <UsuariosPerfis usuarioLogado={usuario} />}
           {aba === 'cfg_migrar' && <ImportarHistorico />}

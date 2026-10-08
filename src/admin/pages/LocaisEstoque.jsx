@@ -1,22 +1,22 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../../components/BuscaProdutoPerda'
-import { listarLocaisEstoque, listarLocaisEstoqueTodos, criarLocalEstoque, atualizarLocalEstoque } from '../../lib/locaisEstoqueApi'
+import { listarLocaisEstoque } from '../../lib/locaisEstoqueApi'
 import { listarSaldosCalculados, buscarHistoricoMovimentos, removerMovimento } from '../../lib/estoqueMovimentosApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../../lib/requisicaoTransferenciaApi'
 import { buscarProdutosPorCodigosEverest } from '../../lib/api'
-import { listarUnidadesAdmin } from '../lib/adminApi'
 import { formatarNumero } from '../lib/formato'
 
-// Painel de conferência dos Locais de estoque (migration_v15.sql, renomeado de "frente" na
-// migration_v19.sql) — cada tela nova (TelaProducao, TelaRequisicao) só mostra o que está em
+// Painel de conferência dos Setores (tabela `locais_estoque`, migration_v15.sql — renomeada de
+// "frente" na v19) — cada tela nova (TelaProducao, TelaRequisicao) só mostra o que está em
 // aberto, nada fica visível depois de fechado. Esta tela mostra o saldo calculado/histórico.
 //
 // 06/10/2026 (pedido do Felipe): o histórico de movimentação é filtrado por ITEM — item + período
-// + local, só então mostra — em vez de uma lista corrida (produções/requisições/transferências
+// + setor, só então mostra — em vez de uma lista corrida (produções/requisições/transferências
 // dos últimos 50, sempre visível), que cresce sem parar e fica difícil de ler.
 //
-// 07/10/2026 (pedido do Felipe): até aqui criar um local novo exigia SQL direto — ganhou um
-// cadastro simples em cima (mesmo molde de Unidades.jsx), o resto da tela continua só leitura.
+// 08/10/2026 (pedido do Felipe, levantamento de nomenclatura): cadastro de Setor saiu daqui — vive
+// agora em Base de dados → Lojas e Setores (LojasSetores.jsx), junto do cadastro de Loja. Esta
+// tela volta a ser só leitura (saldo/histórico), como era antes de ganhar o cadastro embutido.
 
 const LABEL_TIPO = {
   producao_entrada: 'Entrada (produção)',
@@ -93,10 +93,8 @@ export default function LocaisEstoque({ usuario }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {erro && <div className="card"><p style={{ color: 'var(--danger)' }}>{erro}</p></div>}
 
-      <CadastroLocais />
-
       <div className="card">
-        <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo calculado por local de estoque</p>
+        <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo calculado por setor</p>
         <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>
           Ledger próprio (migration_v15.sql), separado do saldo por contagem — só itens com saldo diferente de zero aparecem aqui.
         </p>
@@ -122,7 +120,7 @@ export default function LocaisEstoque({ usuario }) {
           )
         })}
         {locais.every((l) => !(saldosPorLocal[l.id] || []).length) && (
-          <p className="muted">Nenhum local de estoque com saldo lançado ainda.</p>
+          <p className="muted">Nenhum setor com saldo lançado ainda.</p>
         )}
       </div>
 
@@ -155,96 +153,6 @@ export default function LocaisEstoque({ usuario }) {
           </div>
         )}
       </div>
-    </div>
-  )
-}
-
-function CadastroLocais() {
-  const [locais, setLocais] = useState([])
-  const [unidades, setUnidades] = useState([])
-  const [carregando, setCarregando] = useState(true)
-  const [nome, setNome] = useState('')
-  const [unidadeId, setUnidadeId] = useState('')
-  const [salvando, setSalvando] = useState(false)
-  const [erro, setErro] = useState('')
-
-  async function carregar() {
-    setCarregando(true)
-    try {
-      const [l, u] = await Promise.all([listarLocaisEstoqueTodos(), listarUnidadesAdmin()])
-      setLocais(l)
-      setUnidades(u)
-    } finally {
-      setCarregando(false)
-    }
-  }
-
-  useEffect(() => { carregar() }, [])
-
-  async function handleCriar() {
-    if (!nome.trim()) return
-    setErro('')
-    setSalvando(true)
-    try {
-      await criarLocalEstoque({ nome: nome.trim(), unidadeId: unidadeId || null })
-      setNome(''); setUnidadeId('')
-      await carregar()
-    } catch (e) {
-      setErro(e.message)
-    } finally {
-      setSalvando(false)
-    }
-  }
-
-  async function handleAtualizarCampo(l, campo, valor) {
-    await atualizarLocalEstoque(l.id, { [campo]: valor })
-    setLocais((prev) => prev.map((x) => (x.id === l.id ? { ...x, [campo]: valor } : x)))
-  }
-
-  return (
-    <div className="card">
-      <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Cadastro de locais de estoque</p>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
-        <div style={{ flex: 1, minWidth: 140 }}>
-          <label className="muted">Nome</label>
-          <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Bar Dalva" />
-        </div>
-        <div style={{ flex: 1, minWidth: 140 }}>
-          <label className="muted">Loja — opcional</label>
-          <select value={unidadeId} onChange={(e) => setUnidadeId(e.target.value)}>
-            <option value="">Nenhuma</option>
-            {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
-          </select>
-        </div>
-        <button className="primary" onClick={handleCriar} disabled={salvando || !nome.trim()} style={{ height: 44 }}>
-          {salvando ? 'Criando…' : 'Criar'}
-        </button>
-      </div>
-      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 10 }}>{erro}</p>}
-
-      {carregando ? (
-        <p className="muted">Carregando…</p>
-      ) : (
-        locais.map((l) => (
-          <div key={l.id} className="list-item" style={{ gap: 10 }}>
-            <span style={{ flexShrink: 0 }}>{l.nome}</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-              <select
-                value={l.unidade_id || ''}
-                onChange={(e) => handleAtualizarCampo(l, 'unidade_id', e.target.value || null)}
-                style={{ fontSize: 12.5, padding: '6px 8px' }}
-              >
-                <option value="">Sem loja</option>
-                {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
-              </select>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }} className="muted">
-                <input type="checkbox" checked={l.ativo} onChange={(e) => handleAtualizarCampo(l, 'ativo', e.target.checked)} />
-                ativo
-              </label>
-            </div>
-          </div>
-        ))
-      )}
     </div>
   )
 }
@@ -284,7 +192,7 @@ function HistoricoMovimentacao({ locais, usuario }) {
   // Só DEV — pedido do Felipe (06/10/2026): "estou fazendo vários testes, e depois preciso
   // apagar". Apaga de verdade (ver `removerMovimento`), muda o saldo calculado na hora.
   async function excluir(m) {
-    if (!window.confirm('Excluir esse movimento? Isso muda o saldo calculado do local de estoque. Não dá pra desfazer.')) return
+    if (!window.confirm('Excluir esse movimento? Isso muda o saldo calculado do setor. Não dá pra desfazer.')) return
     setExcluindoId(m.id)
     setErro('')
     try {
@@ -314,7 +222,7 @@ function HistoricoMovimentacao({ locais, usuario }) {
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div style={{ flex: 1, minWidth: 140 }}>
-            <label className="muted">Local de estoque</label>
+            <label className="muted">Setor</label>
             <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
               <option value="">Todos</option>
               {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
@@ -343,7 +251,7 @@ function HistoricoMovimentacao({ locais, usuario }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 14 }}>
             <thead>
               <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                {['Data', 'Tipo', 'Local de estoque', 'Quantidade', 'Saldo', 'Usuário', ...(podeExcluir ? [''] : [])].map((h) => (
+                {['Data', 'Tipo', 'Setor', 'Quantidade', 'Saldo', 'Usuário', ...(podeExcluir ? [''] : [])].map((h) => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px', color: 'var(--text-secondary)', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>

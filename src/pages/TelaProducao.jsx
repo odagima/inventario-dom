@@ -266,7 +266,7 @@ function FormPlanejar({ usuario, onPronto }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Planejar produção</p>
       <div>
-        <label className="muted">Local de estoque</label>
+        <label className="muted">Setor</label>
         <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
           <option value="">Selecione…</option>
           {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}

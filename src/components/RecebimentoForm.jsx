@@ -114,7 +114,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
       {!produto ? (
         <div>
-          <label className="muted">Item (insumo base / matéria-prima)</label>
+          <label className="muted">Insumo (matéria-prima)</label>
           <BuscaProdutoPerda categoria={CAT_INSUMO} onSelecionar={setProduto} />
         </div>
       ) : (

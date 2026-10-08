@@ -63,7 +63,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
     <div className="screen">
       <Topbar
         titulo="Requisição / Transferência"
-        subtitulo={aba === 'nova' ? 'nova requisição ou transferência' : 'pedir e mandar material entre locais de estoque'}
+        subtitulo={aba === 'nova' ? 'nova requisição ou transferência' : 'pedir e mandar material entre setores'}
         onVoltar={aba === 'nova' ? () => setAba('pendentes') : onSair}
       />
 

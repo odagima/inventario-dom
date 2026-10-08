@@ -14,7 +14,7 @@ function hojeIso() {
 const OPCOES_ORDENACAO_CONSUMO = [
   { id: 'quantidade', label: 'Quantidade' },
   { id: 'valor', label: 'Valor' },
-  { id: 'item', label: 'Item' }
+  { id: 'item', label: 'Produto' }
 ]
 
 // 11/08/2026, pedido do Felipe: essa fileira deixou de ser "o" resumo do topo da Curva de Vendas —
