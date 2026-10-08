@@ -324,18 +324,35 @@ select option {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  height: 100px;
   background: var(--surface);
   border: 0.5px solid var(--border);
   border-radius: 16px;
-  padding: 16px 6px;
+  padding: 10px 6px;
   box-shadow: 0 1px 3px rgba(28, 43, 68, 0.06);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   color: var(--text);
   text-align: center;
   line-height: 1.25;
   transition: transform 0.08s ease, box-shadow 0.12s ease;
+}
+.icon-tile span:last-child {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.icon-tile-bolha {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .icon-tile:active {
   transform: scale(0.97);

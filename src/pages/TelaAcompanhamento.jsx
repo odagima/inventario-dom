@@ -112,7 +112,7 @@ export default function TelaAcompanhamento({ onSair }) {
 
   if (carregando) return (
     <div className="screen">
-      <Topbar titulo="Acompanhamento" subtitulo="o que está rolando agora" onVoltar={onSair} />
+      <Topbar titulo="Painel de Controle" subtitulo="o que está rolando agora" onVoltar={onSair} />
       <p className="muted">Carregando…</p>
     </div>
   )
@@ -120,7 +120,7 @@ export default function TelaAcompanhamento({ onSair }) {
   return (
     <div className="screen">
       <Topbar
-        titulo="Acompanhamento"
+        titulo="Painel de Controle"
         subtitulo={atualizadoEm ? `atualizado ${faz(atualizadoEm)}` : 'o que está rolando agora'}
         onVoltar={onSair}
       />

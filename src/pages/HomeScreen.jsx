@@ -10,6 +10,7 @@ import TelaProducao from './TelaProducao'
 import TelaRequisicao from './TelaRequisicao'
 import TelaOperacao from './TelaOperacao'
 import { buscarTurnoAberto, turnoVencido } from '../lib/turnosApi'
+import { podeVer } from '../lib/permissoes'
 
 // Reformulada a pedido do Felipe (06/10/2026): os botões empilhados pareciam "um monte de
 // funcionalidade jogada" — vira grade de ícones (ver IconTile.jsx/styles.css `.icon-tile`),
@@ -29,6 +30,13 @@ import { buscarTurnoAberto, turnoVencido } from '../lib/turnosApi'
 // recebimento de mercadoria" — 1ª versão tinha feito uma camada de tela cheia separada, trocado
 // por pedido dele). Ficou de fora Admin, Acompanhamento e Cadastro — "vamos mudar muita coisa,
 // está sem graça": são telas de consulta/gestão, não lançamento rápido, continuam página cheia.
+//
+// 08/10/2026 (pedido do Felipe): grade reordenada por ORDEM DE USO (não mais alfabética — "Abrir/
+// Requisição/Produção/Desperdício/Contagem e assim por diante"), e cada ícone só aparece se a
+// pessoa tiver a permissão (`podeVer`, mesma regra do Admin — sem perfil vinculado, continua vendo
+// tudo). A permissão hoje só distingue "lança" (`contagens.lancar`, cobre Contagem/Perdas/
+// Produção/Requisição/Abrir praça/Recebimento — ainda é uma permissão só, o catálogo de perfis não
+// tem uma por tela) de "só vê" (`contagens.ver`, o Painel de controle).
 export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEntrarAcompanhamento, onAbrirCadastro, onAbrirAdmin, onSair }) {
   const nivel = usuarioLogado.nivelAcesso
   const podeCadastro = nivel === 'administrativo' || nivel === 'estoque_compras'
@@ -73,6 +81,86 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
     setTipoFixoContagem(null)
   }
 
+  // Ordem de uso (não alfabética) — ver comentário no topo do arquivo.
+  const tiles = [
+    {
+      key: 'operacao',
+      icone: 'clock',
+      cor: 'var(--dom-marinho)',
+      label: !localFixoId ? 'Abrir/Fechar praça' : turnoDoLocalFixo ? `Fechar ${usuarioLogado.localPadraoNome}` : `Abrir ${usuarioLogado.localPadraoNome}`,
+      bolinha: !localFixoId ? null : turnoDoLocalFixo ? (turnoVencido(turnoDoLocalFixo) ? 'var(--warning)' : 'var(--danger)') : 'var(--success)',
+      onClick: () => setTelaAberta('operacao'),
+      visivel: podeVer(usuarioLogado, 'contagens.lancar')
+    },
+    {
+      key: 'requisicao',
+      icone: 'arrows-exchange',
+      cor: 'var(--dom-marinho)',
+      label: 'Requisição / Transferência',
+      onClick: () => setTelaAberta('requisicao'),
+      visivel: podeVer(usuarioLogado, 'contagens.lancar')
+    },
+    {
+      key: 'producao',
+      icone: 'chef-hat',
+      cor: 'var(--dom-laranja)',
+      label: 'Produção',
+      onClick: () => setTelaAberta('producao'),
+      visivel: podeVer(usuarioLogado, 'contagens.lancar')
+    },
+    {
+      key: 'perdas',
+      icone: 'trash',
+      cor: 'var(--danger)',
+      label: 'Perdas / Desperdícios',
+      onClick: () => abrirContagem('perdas'),
+      visivel: podeVer(usuarioLogado, 'contagens.lancar')
+    },
+    {
+      key: 'contagem',
+      icone: 'clipboard-list',
+      cor: 'var(--dom-musgo)',
+      label: 'Contagem',
+      onClick: () => abrirContagem(null),
+      visivel: podeVer(usuarioLogado, 'contagens.lancar')
+    },
+    {
+      key: 'recebimento',
+      icone: 'package',
+      cor: 'var(--dom-laranja)',
+      label: 'Recebimento de Mercadoria',
+      onClick: () => { setErroRecebimento(''); setMostrandoRecebimento(true) },
+      visivel: podeVer(usuarioLogado, 'contagens.lancar')
+    },
+    {
+      key: 'acompanhamento',
+      icone: 'activity',
+      cor: 'var(--dom-musgo)',
+      label: 'Painel de Controle',
+      onClick: onEntrarAcompanhamento,
+      visivel: podeVer(usuarioLogado, 'contagens.ver')
+    },
+    // Produtividade ocultada a pedido do Felipe (02/10/2026) — "não vamos usar isso por agora".
+    // onEntrarProdutividade continua recebido pra não quebrar o App.jsx; é só reativar aqui quando
+    // for retomado.
+    {
+      key: 'cadastros',
+      icone: 'database',
+      cor: 'var(--dom-cinza)',
+      label: 'Cadastros',
+      onClick: onAbrirCadastro,
+      visivel: podeCadastro
+    },
+    {
+      key: 'admin',
+      icone: 'settings',
+      cor: 'var(--dom-cinza)',
+      label: 'Administrativo',
+      onClick: onAbrirAdmin,
+      visivel: podeAdmin
+    }
+  ]
+
   return (
     <div className="screen" style={{ justifyContent: 'center' }}>
       <div className="app-header" style={{ position: 'relative', textAlign: 'center' }}>
@@ -94,28 +182,9 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
       </div>
 
       <div className="icon-grid">
-        <IconTile
-          icone="clock"
-          cor="var(--dom-marinho)"
-          label={!localFixoId ? 'Abrir/Fechar praça' : turnoDoLocalFixo ? `Fechar ${usuarioLogado.localPadraoNome}` : `Abrir ${usuarioLogado.localPadraoNome}`}
-          bolinha={!localFixoId ? null : turnoDoLocalFixo ? (turnoVencido(turnoDoLocalFixo) ? 'var(--warning)' : 'var(--danger)') : 'var(--success)'}
-          onClick={() => setTelaAberta('operacao')}
-        />
-        <IconTile icone="activity" cor="var(--dom-musgo)" label="Acompanhamento" onClick={onEntrarAcompanhamento} />
-        <IconTile icone="clipboard-list" cor="var(--dom-musgo)" label="Contagem" onClick={() => abrirContagem(null)} />
-        <IconTile icone="chef-hat" cor="var(--dom-laranja)" label="Produção" onClick={() => setTelaAberta('producao')} />
-        <IconTile icone="arrows-exchange" cor="var(--dom-marinho)" label="Requisição / Transferência" onClick={() => setTelaAberta('requisicao')} />
-        <IconTile icone="trash" cor="var(--danger)" label="Perdas / Desperdícios" onClick={() => abrirContagem('perdas')} />
-        <IconTile icone="package" cor="var(--dom-laranja)" label="Recebimento de Mercadoria" onClick={() => { setErroRecebimento(''); setMostrandoRecebimento(true) }} />
-        {/* Produtividade ocultada a pedido do Felipe (02/10/2026) — "não vamos usar isso por
-            agora". onEntrarProdutividade continua recebido pra não quebrar o App.jsx; é só
-            reativar o tile quando for retomado. */}
-        {podeCadastro && (
-          <IconTile icone="database" cor="var(--dom-cinza)" label="Cadastros" onClick={onAbrirCadastro} />
-        )}
-        {podeAdmin && (
-          <IconTile icone="settings" cor="var(--dom-cinza)" label="Administrativo" onClick={onAbrirAdmin} />
-        )}
+        {tiles.filter((t) => t.visivel).map((t) => (
+          <IconTile key={t.key} icone={t.icone} cor={t.cor} label={t.label} bolinha={t.bolinha} onClick={t.onClick} />
+        ))}
       </div>
 
       {confirmandoTroca && (

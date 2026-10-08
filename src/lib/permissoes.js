@@ -1,13 +1,26 @@
+// Mesma lógica de `podeVer` do Admin (AdminShell.jsx) — duplicada aqui de propósito (lib
+// compartilhado, não importado de dentro de `admin/`) pra Home gatear os próprios ícones (07/10/2026,
+// pedido do Felipe: "só apareçam os botões que aquele usuário tiver permissão de mexer"). Sem
+// perfil vinculado, continua vendo tudo — ninguém perde acesso no meio do serviço.
+export function podeVer(usuario, permissao) {
+  if (!permissao) return true
+  if (!usuario) return true
+  if (usuario.ehDesenvolvedor) return true
+  const lista = Array.isArray(usuario.permissoes) ? usuario.permissoes : []
+  if (!lista.length) return true
+  return lista.includes(permissao)
+}
+
 // Quem pode ATENDER uma requisição (liberar material de um estoque/cofre controlado) — pedido do
 // Felipe (06/10/2026): "está aparecendo pra qualquer um aceitar, e está errado. Precisa ser só
 // estoquista, gestores, adm e dev."
 //
-// Diferente do `podeVer` do Admin (AdminShell.jsx), que deixa "sem perfil vinculado" ver TUDO por
-// compatibilidade — aqui o pedido é travar AGORA, então quem não tem perfil cai no nível antigo
-// (`nivel_acesso`), não num bypass geral. Não existe nível "gestor" separado hoje (só
-// administrativo/estoque_compras/operacao, ver schema.sql) — administrativo cobre esse papel até
-// o Felipe criar perfis específicos (ele pediu exatamente essa possibilidade: perfil é cadastro
-// configurável, ver UsuariosPerfis.jsx `AREAS` → "Requisição e transferência").
+// Diferente do `podeVer` acima, que deixa "sem perfil vinculado" ver TUDO por compatibilidade —
+// aqui o pedido é travar AGORA, então quem não tem perfil cai no nível antigo (`nivel_acesso`), não
+// num bypass geral. Não existe nível "gestor" separado hoje (só administrativo/estoque_compras/
+// operacao, ver schema.sql) — administrativo cobre esse papel até o Felipe criar perfis
+// específicos (ele pediu exatamente essa possibilidade: perfil é cadastro configurável, ver
+// UsuariosPerfis.jsx `AREAS` → "Requisição e transferência").
 export function podeAtenderRequisicao(usuario) {
   if (!usuario) return false
   if (usuario.ehDesenvolvedor) return true
