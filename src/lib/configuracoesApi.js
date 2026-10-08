@@ -19,10 +19,12 @@ export async function buscarConfiguracao(chave) {
   return data?.valor ?? false
 }
 
+// Upsert (08/10/2026): se a migração que semeia a linha ainda não rodou, um `update` simples não
+// dá erro NENHUM — só não afeta nenhuma linha, e a tela acima acha que salvou (mentira silenciosa).
+// Com upsert, a primeira gravação cria a linha sozinha se precisar.
 export async function definirConfiguracao(chave, valor, usuario) {
   const { error } = await supabase
     .from('configuracoes_sistema')
-    .update({ valor, atualizado_em: new Date().toISOString(), atualizado_por: usuario || null })
-    .eq('chave', chave)
+    .upsert({ chave, valor, atualizado_em: new Date().toISOString(), atualizado_por: usuario || null }, { onConflict: 'chave' })
   if (error) throw error
 }

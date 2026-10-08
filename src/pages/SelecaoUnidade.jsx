@@ -13,6 +13,7 @@ import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
 import Icon from '../components/Icon'
+import { useRotulos } from '../lib/RotulosContext'
 
 // Contagem semanal não pede loja (Compras não separa por loja no Everest, e a Contagem Semanal
 // já é filtrada por Grupo de contagem). 28/08/2026: perdas também não — é lançamento de cozinha,
@@ -70,6 +71,7 @@ function turnoDeAgora() {
 // esta tela — abre a sessão sozinho e cai direto no cabeçalho de TelaPerdas, que mostra Loja/
 // Setor/Data/Hora/Pessoa e deixa trocar só pra esse lançamento (ver TelaPerdas.jsx).
 export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta, onVoltar }) {
+  const rotulos = useRotulos()
   const [etapa, setEtapa] = useState('escolha')
   const [tipo, setTipo] = useState(tipoFixo || null)
   const [unidades, setUnidades] = useState([])
@@ -347,10 +349,10 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
                 {tipoExigeLoja(tipo) && (
                   <div style={{ padding: 12, borderRadius: 10, border: unidadeId ? '1px solid var(--border)' : '2px solid var(--warning)', background: 'var(--surface-2)' }}>
                     <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>
-                      Loja {!unidadeId && <span style={{ color: 'var(--warning)', fontWeight: 500 }}>— escolha antes de iniciar</span>}
+                      {rotulos.loja} {!unidadeId && <span style={{ color: 'var(--warning)', fontWeight: 500 }}>— escolha antes de iniciar</span>}
                     </label>
                     <select value={unidadeId} onChange={(e) => setUnidadeId(e.target.value)}>
-                      <option value="">Selecione a loja…</option>
+                      <option value="">Selecione a {rotulos.loja.toLowerCase()}…</option>
                       {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
                     </select>
                   </div>
@@ -393,14 +395,14 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
                 {tipo === 'perdas' && (
                   <div style={{ padding: 12, borderRadius: 10, border: localEstoqueId ? '1px solid var(--border)' : '2px solid var(--warning)', background: 'var(--surface-2)' }}>
                     <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>
-                      Setor {!localEstoqueId && <span style={{ color: 'var(--warning)', fontWeight: 500 }}>— escolha antes de iniciar</span>}
+                      {rotulos.setor} {!localEstoqueId && <span style={{ color: 'var(--warning)', fontWeight: 500 }}>— escolha antes de iniciar</span>}
                     </label>
                     <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
                       <option value="">Selecione…</option>
                       {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
                     </select>
                     <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
-                      Sem Setor padrão no seu cadastro ainda — fala com quem cuida do Administrativo pra não precisar escolher toda vez.
+                      Sem {rotulos.setor.toLowerCase()} padrão no seu cadastro ainda — fala com quem cuida do Administrativo pra não precisar escolher toda vez.
                     </p>
                   </div>
                 )}

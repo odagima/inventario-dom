@@ -517,8 +517,10 @@ export async function criarUnidade({ nome, cnpj, codigoDeposito }) {
   return data
 }
 
-export async function atualizarUnidade(id, { cnpj, codigoDeposito }) {
-  const { error } = await supabase.from('unidades').update({ cnpj: cnpj || null, codigo_deposito: codigoDeposito || null }).eq('id', id)
+export async function atualizarUnidade(id, { nome, cnpj, codigoDeposito }) {
+  const dados = { cnpj: cnpj || null, codigo_deposito: codigoDeposito || null }
+  if (nome != null) dados.nome = nome
+  const { error } = await supabase.from('unidades').update(dados).eq('id', id)
   if (error) throw error
 }
 

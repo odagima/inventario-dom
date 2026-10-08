@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { buscarProdutosPorNome } from '../lib/api'
+import { useRotulos } from '../lib/RotulosContext'
 
 export default function BuscaProduto({ onSelecionar, onAbrirCamera, mostrarCamera = true }) {
+  const rotulos = useRotulos()
   const [termo, setTermo] = useState('')
   const [resultados, setResultados] = useState([])
   const [buscando, setBuscando] = useState(false)
@@ -44,13 +46,13 @@ export default function BuscaProduto({ onSelecionar, onAbrirCamera, mostrarCamer
 
   return (
     <div style={{ position: 'relative' }}>
-      <label className="muted">Item da contagem</label>
+      <label className="muted">{rotulos.item} da contagem</label>
       <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
         <input
           ref={inputRef}
           value={termo}
           onChange={(e) => setTermo(e.target.value)}
-          placeholder="Digite o nome do produto"
+          placeholder={`Digite o nome do ${rotulos.item.toLowerCase()}`}
           autoFocus
           type="search"
           name="busca-produto-contagem"
@@ -99,7 +101,7 @@ export default function BuscaProduto({ onSelecionar, onAbrirCamera, mostrarCamer
       )}
 
       {termo.trim().length >= 2 && !buscando && resultados.length === 0 && (
-        <p className="muted" style={{ marginTop: 8 }}>Nenhum produto encontrado — use a câmera ou cadastre pelo código de barras.</p>
+        <p className="muted" style={{ marginTop: 8 }}>Nenhum {rotulos.item.toLowerCase()} encontrado — use a câmera ou cadastre pelo código de barras.</p>
       )}
 
       <p className="muted" style={{ marginTop: 12, textAlign: 'center' }}>

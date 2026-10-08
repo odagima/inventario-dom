@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { buscarProdutosPorCategoriaPerda } from '../lib/api'
+import { useRotulos } from '../lib/RotulosContext'
 
 // Busca usada no registro de perdas, já restrita à categoria escolhida (matéria-prima /
 // pré-preparo / prato). Separada do BuscaProduto da contagem porque aquela sempre exclui
 // PRODUTO ACABADO e não aceita filtro — e porque aqui não há câmera: perda é digitada no fim do
 // turno, não escaneada na prateleira.
 export default function BuscaProdutoPerda({ categoria, onSelecionar }) {
+  const rotulos = useRotulos()
   const [termo, setTermo] = useState('')
   const [resultados, setResultados] = useState([])
   const [buscando, setBuscando] = useState(false)
@@ -51,11 +53,11 @@ export default function BuscaProdutoPerda({ categoria, onSelecionar }) {
 
   return (
     <div style={{ position: 'relative' }}>
-      <label className="muted">{categoria?.label || 'Item'}</label>
+      <label className="muted">{categoria?.label || rotulos.item}</label>
       <input
         value={termo}
         onChange={(e) => setTermo(e.target.value)}
-        placeholder={categoria?.valor === 'prato' ? 'Digite o nome do prato' : 'Digite o nome do item'}
+        placeholder={categoria?.valor === 'prato' ? 'Digite o nome do prato' : `Digite o nome do ${rotulos.item.toLowerCase()}`}
         autoFocus
         type="search"
         name="busca-item-perda"
@@ -88,7 +90,7 @@ export default function BuscaProdutoPerda({ categoria, onSelecionar }) {
 
       {termo.trim().length >= 2 && !buscando && !erro && resultados.length === 0 && (
         <p className="muted" style={{ marginTop: 8 }}>
-          Nada encontrado em {(categoria?.label || 'nesta categoria').toLowerCase()}. Se o item for de outro tipo, volte e troque a categoria acima.
+          Nada encontrado em {(categoria?.label || 'nesta categoria').toLowerCase()}. Se o {rotulos.item.toLowerCase()} for de outro tipo, volte e troque a categoria acima.
         </p>
       )}
     </div>

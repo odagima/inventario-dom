@@ -5,6 +5,7 @@ import Modal from '../components/Modal'
 import Icon from '../components/Icon'
 import TrocarLocalModal from '../components/TrocarLocalModal'
 import ContextoLancamento from '../components/ContextoLancamento'
+import { useRotulos } from '../lib/RotulosContext'
 import { MOTIVOS_PERDA, CATEGORIAS_PERDA, LABEL_MOTIVO_PERDA, LABEL_TURNO } from '../lib/perdas'
 import {
   registrarItemContagem,
@@ -42,6 +43,7 @@ function formatarQtd(qtd, unidade) {
 }
 
 export default function TelaPerdas({ sessao: sessaoInicial, unidade: unidadeInicial, local: localInicial, usuarioLogado, onFinalizar, onSair }) {
+  const rotulos = useRotulos()
   // Data e turno podem ser corrigidos aqui dentro, então a sessão vira estado local em vez de
   // prop lida direto — senão a tela continuaria mostrando os valores antigos depois de salvar.
   const [sessao, setSessao] = useState(sessaoInicial)
@@ -248,8 +250,8 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade: unidadeInic
       />
 
       <ContextoLancamento
-        loja={unidade?.nome || 'sem loja'}
-        setor={local?.nome || 'sem setor'}
+        loja={unidade?.nome || `sem ${rotulos.loja.toLowerCase()}`}
+        setor={local?.nome || `sem ${rotulos.setor.toLowerCase()}`}
         data={sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : '—'}
         turno={LABEL_TURNO[sessao.turno]}
         usuario={usuarioLogado?.nome}

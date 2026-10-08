@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Topbar from '../components/Topbar'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarTurnoAberto, turnoVencido, periodoDoTurno, LABEL_PERIODO, abrirTurno, fecharTurno } from '../lib/turnosApi'
+import { useRotulos } from '../lib/RotulosContext'
 
 // Abrir/Fechar praça (07/10/2026, pedido do Felipe — rodada 2: "tipo caixa", depois simplificado
 // pra "clica, escolhe o local (se não tiver vínculo fixo), confirma, e só DEPOIS pergunta se quer
@@ -19,6 +20,7 @@ function hojeHora(iso) {
 }
 
 export default function TelaOperacao({ usuarioLogado, onSair, onAbrirRequisicao }) {
+  const rotulos = useRotulos()
   const localFixoId = usuarioLogado?.localPadraoId || null
   const localFixoNome = usuarioLogado?.localPadraoNome || null
 
@@ -97,7 +99,7 @@ export default function TelaOperacao({ usuarioLogado, onSair, onAbrirRequisicao 
 
       {!acaoFeita && !localFixoId && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <label className="muted">Setor</label>
+          <label className="muted">{rotulos.setor}</label>
           <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
             <option value="">Selecione…</option>
             {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}

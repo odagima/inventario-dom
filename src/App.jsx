@@ -5,6 +5,7 @@ import TelaAcompanhamento from './pages/TelaAcompanhamento'
 import CadastroShell from './admin/CadastroShell'
 import AdminShell from './admin/AdminShell'
 import ProdutividadeShell from './produtividade/ProdutividadeShell'
+import { RotulosProvider } from './lib/RotulosContext'
 
 // 25/08/2026, pedido do Felipe ("toda vez que vou atualizar a página, sai"): o login vivia só em
 // `useState`, então qualquer F5 / troca de aba / retomada do PWA no celular jogava de volta pra tela
@@ -77,22 +78,28 @@ export default function App() {
 
   if (modo === 'login') return <LoginScreen onEntrar={handleLogin} />
 
-  if (modo === 'cadastro') return <CadastroShell onSair={voltarPraHome} />
-  // 02/09/2026 (§67): o AdminShell passa a receber o usuário INTEIRO, não só o nível — é dele que
-  // saem as permissões que montam o menu. `nivelAcesso` continua sendo passado porque o gating cai
-  // de volta nele quando a pessoa não tem perfil vinculado (ninguém perde acesso na transição).
-  if (modo === 'admin') return <AdminShell nivelAcesso={usuarioAtual?.nivelAcesso} usuario={usuarioAtual} onSair={voltarPraHome} />
-  if (modo === 'produtividade') return <ProdutividadeShell usuarioLogado={usuarioAtual} onVoltar={voltarPraHome} />
-  if (modo === 'acompanhamento') return <TelaAcompanhamento onSair={voltarPraHome} />
-
+  // Rótulos (Loja/Setor/Usuário/Item/Turno) ficam disponíveis a partir daqui pra tudo que é logado
+  // — Admin (onde se edita), Cadastro, Produtividade e Home/telas de lançamento (onde se usa).
   return (
-    <HomeScreen
-      usuarioLogado={usuarioAtual}
-      onEntrarAcompanhamento={() => setModo('acompanhamento')}
-      onEntrarProdutividade={() => setModo('produtividade')}
-      onAbrirCadastro={() => setModo('cadastro')}
-      onAbrirAdmin={() => setModo('admin')}
-      onSair={sair}
-    />
+    <RotulosProvider>
+      {modo === 'cadastro' ? <CadastroShell onSair={voltarPraHome} />
+        // 02/09/2026 (§67): o AdminShell passa a receber o usuário INTEIRO, não só o nível — é dele
+        // que saem as permissões que montam o menu. `nivelAcesso` continua sendo passado porque o
+        // gating cai de volta nele quando a pessoa não tem perfil vinculado (ninguém perde acesso
+        // na transição).
+        : modo === 'admin' ? <AdminShell nivelAcesso={usuarioAtual?.nivelAcesso} usuario={usuarioAtual} onSair={voltarPraHome} />
+        : modo === 'produtividade' ? <ProdutividadeShell usuarioLogado={usuarioAtual} onVoltar={voltarPraHome} />
+        : modo === 'acompanhamento' ? <TelaAcompanhamento onSair={voltarPraHome} />
+        : (
+          <HomeScreen
+            usuarioLogado={usuarioAtual}
+            onEntrarAcompanhamento={() => setModo('acompanhamento')}
+            onEntrarProdutividade={() => setModo('produtividade')}
+            onAbrirCadastro={() => setModo('cadastro')}
+            onAbrirAdmin={() => setModo('admin')}
+            onSair={sair}
+          />
+        )}
+    </RotulosProvider>
   )
 }

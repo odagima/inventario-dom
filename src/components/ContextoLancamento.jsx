@@ -1,4 +1,5 @@
 import Icon from './Icon'
+import { useRotulos } from '../lib/RotulosContext'
 
 // Bloco padrão no topo de todo lançamento que puxa a base (Perdas, Produção, Recebimento, Contagem,
 // Requisição/Transferência — pedido do Felipe, 2ª rodada: "o cabeçalho é isso mesmo, só precisa
@@ -28,16 +29,17 @@ export default function ContextoLancamento({
   loja, setor, origem, destino, data, turno, usuario,
   onTrocarSetor, onTrocarTurno, onTrocarData, onTrocarOrigem, onTrocarDestino, onInverter
 }) {
+  const rotulos = useRotulos()
   const secundarios = [
-    loja != null && { chave: 'loja', label: 'Loja', valor: loja, onClick: onTrocarSetor },
+    loja != null && { chave: 'loja', label: rotulos.loja, valor: loja, onClick: onTrocarSetor },
     data != null && { chave: 'data', label: 'Data', valor: data, onClick: onTrocarData },
-    usuario != null && { chave: 'usuario', label: 'Usuário', valor: usuario },
-    turno != null && { chave: 'turno', label: 'Turno', valor: turno, onClick: onTrocarTurno }
+    usuario != null && { chave: 'usuario', label: rotulos.usuario, valor: usuario },
+    turno != null && { chave: 'turno', label: rotulos.turno, valor: turno, onClick: onTrocarTurno }
   ].filter(Boolean)
 
   return (
     <div className="card" style={{ marginBottom: 14, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {setor != null && <Campo label="Setor" valor={setor} onClick={onTrocarSetor} destaque />}
+      {setor != null && <Campo label={rotulos.setor} valor={setor} onClick={onTrocarSetor} destaque />}
       {(origem != null || destino != null) && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           {origem != null && <Campo label="De" valor={origem} onClick={onTrocarOrigem} destaque />}

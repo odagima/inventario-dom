@@ -3,6 +3,7 @@ import BuscaProdutoPerda from './BuscaProdutoPerda'
 import TrocarLocalModal from './TrocarLocalModal'
 import ContextoLancamento from './ContextoLancamento'
 import Topbar from './Topbar'
+import { useRotulos } from '../lib/RotulosContext'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarRecebimentoParecido, criarRecebimento, excluirRecebimento } from '../lib/recebimentosApi'
@@ -18,6 +19,7 @@ function agora() {
 // prima), e quantidade." Data/horário não são campos editáveis de propósito — é "chegou agora",
 // não um lançamento retroativo como Perdas/Contagem.
 export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onErro, onSair }) {
+  const rotulos = useRotulos()
   const [locais, setLocais] = useState([])
   // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): quem tem Setor
   // padrão vinculado já entra com o local certo — ainda dá pra trocar no select, é escolha de uma
@@ -104,7 +106,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <ContextoLancamento
-          setor={localAtual?.nome || 'sem setor'}
+          setor={localAtual?.nome || `sem ${rotulos.setor.toLowerCase()}`}
           data={agora()}
           usuario={usuario}
           onTrocarSetor={() => setTrocandoSetor(true)}

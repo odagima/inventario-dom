@@ -5,6 +5,7 @@ import Modal from '../components/Modal'
 import Icon from '../components/Icon'
 import TrocarLocalModal from '../components/TrocarLocalModal'
 import ContextoLancamento from '../components/ContextoLancamento'
+import { useRotulos } from '../lib/RotulosContext'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarFatoresCorrecao, calcularFCTeorico, filhosDiretos, brutoEquivalente } from '../lib/fatoresCorrecaoApi'
@@ -244,6 +245,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
 
 // ── Planejar: só registra "o que falta produzir" (meta), sem pesar nada ainda ─────────────────
 function FormPlanejar({ usuario, onPronto }) {
+  const rotulos = useRotulos()
   const [locais, setLocais] = useState([])
   const [localEstoqueId, setLocalEstoqueId] = useState('')
   const [categoria, setCategoria] = useState(CATEGORIAS[1])
@@ -274,7 +276,7 @@ function FormPlanejar({ usuario, onPronto }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div>
-        <label className="muted">Setor</label>
+        <label className="muted">{rotulos.setor}</label>
         <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
           <option value="">Selecione…</option>
           {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
@@ -318,6 +320,7 @@ function FormPlanejar({ usuario, onPronto }) {
 
 // ── Abrir: a entrada ("o que eu peguei") + o local de estoque ────────────────────────────────
 function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
+  const rotulos = useRotulos()
   const [data, setData] = useState(hojeIso())
   const [locais, setLocais] = useState([])
   // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos" + "não está tudo com
@@ -364,7 +367,7 @@ function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {!prefill?.planejadaId && (
         <ContextoLancamento
-          setor={localAtual?.nome || 'sem setor'}
+          setor={localAtual?.nome || `sem ${rotulos.setor.toLowerCase()}`}
           usuario={usuario}
           onTrocarSetor={() => setTrocandoSetor(true)}
         />
