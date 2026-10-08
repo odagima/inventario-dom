@@ -275,50 +275,54 @@ export default function TelaContagem({ sessao, unidade, grupo, usuarioLogado, on
   return (
     <div className="screen">
       <Topbar
-        titulo={nomeContexto}
+        titulo="Contagem"
         onVoltar={onSair}
         acoes={[
           { icone: 'trash', aria: 'Excluir', cor: 'var(--danger)', onClick: () => setConfirmandoExclusao(true) },
           { icone: 'send', aria: 'Enviar', onClick: () => setConfirmandoEnvio(true) }
         ]}
-        subtitulo={(
-          <>
-            <p style={{ margin: '0 0 6px' }}>
-              {NOMES_TIPO[sessao.tipo] || sessao.tipo}
-              {sessao.tipo === 'mensal' && sessao.mes_referencia && (
-                <> · ref. {String(sessao.mes_referencia).padStart(2, '0')}/{sessao.ano_referencia}</>
-              )}
-            </p>
-            {progresso && progresso.esperados > 0 && (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: 13, color: 'var(--header-text-secondary)' }}>
-                    <strong style={{ color: 'var(--header-text)' }}>{progresso.contados}</strong> de {progresso.esperados} itens
-                  </span>
-                  <span style={{ fontSize: 13, color: 'var(--header-text-secondary)' }}>
-                    {Math.round((progresso.contados / progresso.esperados) * 100)}%
-                  </span>
-                </div>
-                {/* Track claro translúcido — essa barra fica dentro do cabeçalho marinho da Contagem. */}
-                <div style={{ background: 'rgba(244,241,233,0.22)', borderRadius: 6, height: 6, overflow: 'hidden' }}>
-                  <div
-                    style={{
-                      background: 'linear-gradient(90deg, var(--accent), var(--accent-2))', height: '100%',
-                      width: `${Math.min(100, Math.round((progresso.contados / progresso.esperados) * 100))}%`,
-                      transition: 'width 0.3s ease'
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-          </>
-        )}
       />
 
       <ContextoLancamento
         loja={unidade?.nome}
         usuario={usuarioLogado?.nome}
       />
+
+      {/* 08/10/2026 (pedido do Felipe: "todas as abas precisam ter a mesma informação... igual ao
+          cabeçalho das perdas" — o título da barra azul vinha trocando (nome da loja/grupo) e
+          carregava a barra de progresso, diferente de todo o resto, que só tem Voltar + título fixo
+          + ícones ali). Tipo/referência/grupo/progresso viram um cartão próprio, igual a como as
+          outras telas guardam o que é específico daquele lançamento fora da barra azul. */}
+      <div className="card" style={{ marginBottom: 14, padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <p style={{ margin: 0, fontSize: 13 }}>
+          <strong>{NOMES_TIPO[sessao.tipo] || sessao.tipo}</strong>
+          {sessao.tipo === 'mensal' && sessao.mes_referencia && (
+            <span className="muted"> · ref. {String(sessao.mes_referencia).padStart(2, '0')}/{sessao.ano_referencia}</span>
+          )}
+          {!unidade && grupo?.nome && <span className="muted"> · {grupo.nome}</span>}
+        </p>
+        {progresso && progresso.esperados > 0 && (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span className="muted" style={{ fontSize: 13 }}>
+                <strong style={{ color: 'var(--text)' }}>{progresso.contados}</strong> de {progresso.esperados} itens
+              </span>
+              <span className="muted" style={{ fontSize: 13 }}>
+                {Math.round((progresso.contados / progresso.esperados) * 100)}%
+              </span>
+            </div>
+            <div style={{ background: 'var(--surface-3)', borderRadius: 6, height: 6, overflow: 'hidden' }}>
+              <div
+                style={{
+                  background: 'linear-gradient(90deg, var(--accent), var(--accent-2))', height: '100%',
+                  width: `${Math.min(100, Math.round((progresso.contados / progresso.esperados) * 100))}%`,
+                  transition: 'width 0.3s ease'
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       {confirmandoEnvio && (
         <Modal onFechar={() => !enviando && setConfirmandoEnvio(false)} largura={340}>
