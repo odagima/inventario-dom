@@ -199,7 +199,6 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
 
       <button
         onClick={() => setConfirmandoTroca(true)}
-        className="ghost"
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 18 }}
       >
         <Icon nome="user" tamanho={16} />
