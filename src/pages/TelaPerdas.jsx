@@ -10,8 +10,11 @@ import {
   removerItemContagem,
   finalizarSessao,
   excluirSessao,
-  atualizarDataETurnoSessao
+  atualizarDataETurnoSessao,
+  atualizarContextoSessao,
+  listarUnidades
 } from '../lib/api'
+import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 
 // Tela separada da TelaContagem de propósito. A contagem é "quanto tem no estoque" e traz junto
 // câmera, código de barras, itens esperados, detecção de duplicado e barra de progresso — nada
@@ -38,7 +41,7 @@ function formatarQtd(qtd, unidade) {
   return n.toLocaleString('pt-BR', { maximumFractionDigits: 3 })
 }
 
-export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLogado, onFinalizar, onSair }) {
+export default function TelaPerdas({ sessao: sessaoInicial, unidade: unidadeInicial, local: localInicial, usuarioLogado, onFinalizar, onSair }) {
   // Data e turno podem ser corrigidos aqui dentro, então a sessão vira estado local em vez de
   // prop lida direto — senão a tela continuaria mostrando os valores antigos depois de salvar.
   const [sessao, setSessao] = useState(sessaoInicial)
@@ -47,6 +50,20 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
   const [turnoEditado, setTurnoEditado] = useState(sessaoInicial.turno || 'almoco')
   const [salvandoQuando, setSalvandoQuando] = useState(false)
   const [erroQuando, setErroQuando] = useState('')
+
+  // Loja/Setor (08/10/2026, pedido do Felipe: "deixar possível alterar loja e local... vem um
+  // popup de confirmação"). Igual à data/turno acima, viram estado local pra tela refletir na hora
+  // — só que aqui tem um passo de confirmação a mais, por ser mais sensível (padroniza a base).
+  const [unidade, setUnidade] = useState(unidadeInicial || null)
+  const [local, setLocal] = useState(localInicial || null)
+  const [trocandoSetor, setTrocandoSetor] = useState(false)
+  const [confirmandoTroca, setConfirmandoTroca] = useState(false)
+  const [unidadeIdNova, setUnidadeIdNova] = useState('')
+  const [localEstoqueIdNovo, setLocalEstoqueIdNovo] = useState('')
+  const [unidadesDisponiveis, setUnidadesDisponiveis] = useState([])
+  const [locaisDisponiveis, setLocaisDisponiveis] = useState([])
+  const [salvandoTroca, setSalvandoTroca] = useState(false)
+  const [erroTroca, setErroTroca] = useState('')
   // 'lista' (topo do loop) | 'item' (categoria + busca) | 'quantidade'
   const [estado, setEstado] = useState('lista')
   const [produtoAtual, setProdutoAtual] = useState(null)
@@ -159,6 +176,39 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
     }
   }
 
+  async function abrirTrocarSetor() {
+    setErroTroca('')
+    setUnidadeIdNova(unidade?.id || '')
+    setLocalEstoqueIdNovo(local?.id || '')
+    setTrocandoSetor(true)
+    setConfirmandoTroca(false)
+    if (!unidadesDisponiveis.length || !locaisDisponiveis.length) {
+      try {
+        const [u, l] = await Promise.all([listarUnidades(), listarLocaisEstoque()])
+        setUnidadesDisponiveis(u)
+        setLocaisDisponiveis(l)
+      } catch (e) {
+        setErroTroca(e.message)
+      }
+    }
+  }
+
+  async function handleConfirmarTroca() {
+    setSalvandoTroca(true)
+    setErroTroca('')
+    try {
+      await atualizarContextoSessao(sessao.id, { unidadeId: unidadeIdNova || null, localEstoqueId: localEstoqueIdNovo || null })
+      setUnidade(unidadesDisponiveis.find((u) => u.id === unidadeIdNova) || null)
+      setLocal(locaisDisponiveis.find((l) => l.id === localEstoqueIdNovo) || null)
+      setTrocandoSetor(false)
+      setConfirmandoTroca(false)
+    } catch (e) {
+      setErroTroca('Não consegui trocar — ' + e.message)
+    } finally {
+      setSalvandoTroca(false)
+    }
+  }
+
   async function handleFinalizarSessao() {
     setEnviando(true)
     setErroEnvio('')
@@ -189,6 +239,7 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
 
   const contexto = [
     unidade?.nome,
+    local?.nome,
     sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : null,
     LABEL_TURNO[sessao.turno]
   ].filter(Boolean).join(' · ')
@@ -220,29 +271,40 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
   return (
     <div className="screen">
       <Topbar
-        titulo={unidade?.nome || 'Perdas'}
+        titulo="Perdas / Desperdícios"
         onVoltar={onSair}
         acoes={[
           { icone: 'trash', aria: 'Excluir', cor: 'var(--danger)', onClick: () => setConfirmandoExclusao(true) },
           { icone: 'send', aria: 'Enviar', onClick: () => setConfirmandoEnvio(true) }
         ]}
         subtitulo={(
-          <p style={{ margin: 0 }}>
-            registro de perdas · {contexto}
-            {' '}
-            <button
-              className="ghost"
-              onClick={() => {
-                setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
-                setTurnoEditado(sessao.turno || 'almoco')
-                setErroQuando('')
-                setEditandoQuando(true)
-              }}
-              style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
-            >
-              alterar
-            </button>
-          </p>
+          <div>
+            <p style={{ margin: 0 }}>
+              <button
+                type="button"
+                onClick={abrirTrocarSetor}
+                style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
+              >
+                {unidade?.nome || 'sem loja'} · {local?.nome || 'sem setor'}
+              </button>
+              {' · '}
+              {sessao.data_referencia ? sessao.data_referencia.split('-').reverse().join('/') : '—'} {LABEL_TURNO[sessao.turno]}
+              {' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setDataEditada(sessao.data_referencia || new Date().toISOString().slice(0, 10))
+                  setTurnoEditado(sessao.turno || 'almoco')
+                  setErroQuando('')
+                  setEditandoQuando(true)
+                }}
+                style={{ padding: 0, background: 'none', border: 'none', textDecoration: 'underline', fontSize: 13, color: 'inherit', cursor: 'pointer' }}
+              >
+                alterar
+              </button>
+            </p>
+            <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>{usuarioLogado?.nome}</p>
+          </div>
         )}
       />
 
@@ -290,6 +352,59 @@ export default function TelaPerdas({ sessao: sessaoInicial, unidade, usuarioLoga
             </button>
           </div>
         </div>
+      )}
+
+      {trocandoSetor && (
+        <Modal onFechar={() => !salvandoTroca && setTrocandoSetor(false)} largura={360}>
+          {!confirmandoTroca ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Trocar loja/setor</p>
+              <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                Vale só pra esse lançamento — na próxima vez volta a sugerir o padrão do seu cadastro.
+              </p>
+              <div>
+                <label className="muted">Loja</label>
+                <select value={unidadeIdNova} onChange={(e) => setUnidadeIdNova(e.target.value)}>
+                  <option value="">Sem loja</option>
+                  {unidadesDisponiveis.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="muted">Setor</label>
+                <select value={localEstoqueIdNovo} onChange={(e) => setLocalEstoqueIdNovo(e.target.value)}>
+                  <option value="">Sem setor</option>
+                  {locaisDisponiveis.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+                </select>
+              </div>
+              {erroTroca && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erroTroca}</p>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setTrocandoSetor(false)} style={{ flex: 1 }}>Cancelar</button>
+                <button
+                  className="primary"
+                  onClick={() => setConfirmandoTroca(true)}
+                  disabled={unidadeIdNova === (unidade?.id || '') && localEstoqueIdNovo === (local?.id || '')}
+                  style={{ flex: 1 }}
+                >
+                  Trocar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Confirma a troca?</p>
+              <p className="muted" style={{ margin: 0 }}>
+                {unidadesDisponiveis.find((u) => u.id === unidadeIdNova)?.nome || 'sem loja'} · {locaisDisponiveis.find((l) => l.id === localEstoqueIdNovo)?.nome || 'sem setor'}
+              </p>
+              {erroTroca && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erroTroca}</p>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setConfirmandoTroca(false)} disabled={salvandoTroca} style={{ flex: 1 }}>Voltar</button>
+                <button className="primary" onClick={handleConfirmarTroca} disabled={salvandoTroca} style={{ flex: 1 }}>
+                  {salvandoTroca ? 'Trocando…' : 'Confirmar troca'}
+                </button>
+              </div>
+            </div>
+          )}
+        </Modal>
       )}
 
       {confirmandoEnvio && (

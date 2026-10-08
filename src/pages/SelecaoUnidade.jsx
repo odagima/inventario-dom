@@ -9,6 +9,7 @@ import {
   buscarConfiguracaoGeral,
   finalizarSessao
 } from '../lib/api'
+import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
 import Icon from '../components/Icon'
@@ -62,11 +63,19 @@ function turnoDeAgora() {
 //
 // `tipoFixo`: entrada direta pra um tipo específico (hoje só "perdas", botão próprio na Home) —
 // pula a lista "o que você vai fazer" e já cai direto no formulário daquele tipo.
+//
+// 08/10/2026 (pedido do Felipe): Perdas ganha Setor (`locais_estoque`, mesma base do Abrir/Fechar
+// praça — migration_v25.sql) — "todos os setores serão padronizados e todos os lançamentos
+// precisam puxar dessa base". Quem já tem Setor padrão vinculado (cadastro de usuário) nem vê
+// esta tela — abre a sessão sozinho e cai direto no cabeçalho de TelaPerdas, que mostra Loja/
+// Setor/Data/Hora/Pessoa e deixa trocar só pra esse lançamento (ver TelaPerdas.jsx).
 export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta, onVoltar }) {
   const [etapa, setEtapa] = useState('escolha')
   const [tipo, setTipo] = useState(tipoFixo || null)
   const [unidades, setUnidades] = useState([])
   const [unidadeId, setUnidadeId] = useState('')
+  const [locais, setLocais] = useState([])
+  const [localEstoqueId, setLocalEstoqueId] = useState(usuarioLogado?.localPadraoId || '')
   const [grupos, setGrupos] = useState([])
   const [grupoId, setGrupoId] = useState('')
   const [dataContagem, setDataContagem] = useState(hojeIso())
@@ -78,16 +87,26 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
   const [erro, setErro] = useState('')
   const [sessaoAntigaDetectada, setSessaoAntigaDetectada] = useState(null)
 
+  // Auto-abre sem pedir nada quando dá: Perdas + Setor padrão já vinculado no cadastro.
+  const autoAbrindo = tipoFixo === 'perdas' && !!usuarioLogado?.localPadraoId
+
   useEffect(() => {
-    Promise.all([listarUnidades(), buscarConfiguracaoGeral()])
-      .then(([listaUnidades, config]) => {
+    Promise.all([listarUnidades(), listarLocaisEstoque(), buscarConfiguracaoGeral()])
+      .then(([listaUnidades, listaLocais, config]) => {
         setUnidades(listaUnidades)
-        // Não pré-selecionar loja: força o usuário a escolher (evita contagem na loja errada).
+        setLocais(listaLocais)
+        // Não pré-selecionar loja: força o usuário a escolher (evita contagem na loja errada) —
+        // Setor é diferente: vem do cadastro da pessoa de propósito (ver `autoAbrindo` acima).
         setConfigGeral(config)
       })
       .catch((e) => setErro(e.message))
       .finally(() => setCarregando(false))
   }, [])
+
+  useEffect(() => {
+    if (!carregando && autoAbrindo) handleContinuar()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carregando, autoAbrindo])
 
   useEffect(() => {
     if (tipo && POR_VALOR[tipo]?.usaGrupo) {
@@ -108,6 +127,7 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
   async function handleContinuar() {
     if (!tipo) return
     if (tipoExigeLoja(tipo) && !unidadeId) return
+    if (tipo === 'perdas' && !localEstoqueId) return
     setErro('')
     setProcessando(true)
     try {
@@ -124,6 +144,7 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
             usuario: usuarioLogado.nome,
             dataReferencia: dataContagem,
             turno,
+            localEstoqueId: localEstoqueId || undefined,
             semEscopo: true
           })
         : tipoExigeLoja(tipo)
@@ -133,11 +154,12 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
         const horasAberta = (Date.now() - new Date(sessaoExistente.iniciada_em).getTime()) / (1000 * 60 * 60)
         const unidade = unidades.find((u) => u.id === unidadeId)
         const grupo = grupos.find((g) => g.id === grupoId)
+        const local = locais.find((l) => l.id === (sessaoExistente.local_estoque_id || localEstoqueId))
         if (horasAberta >= 18) {
           setSessaoAntigaDetectada({ sessao: sessaoExistente, unidade, grupo, horasAberta })
           return
         }
-        onSessaoPronta({ sessao: sessaoExistente, unidade, grupo })
+        onSessaoPronta({ sessao: sessaoExistente, unidade, grupo, local })
         return
       }
       const infoTipo = POR_VALOR[tipo]
@@ -171,7 +193,7 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
       // certo pro histórico/relatórios.
       const [anoData, mesData] = tipoUsaData(tipo) && dataContagem ? dataContagem.split('-').map(Number) : []
       const sessao = await iniciarSessao({
-        unidadeId: tipoExigeLoja(tipo) ? unidadeId : null,
+        unidadeId: tipoExigeLoja(tipo) ? unidadeId : (tipo === 'perdas' ? (usuarioLogado.unidadeId || null) : null),
         usuario: usuarioLogado.nome,
         tipo,
         grupoId: POR_VALOR[tipo]?.usaGrupo ? grupoId : null,
@@ -179,11 +201,13 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
         anoReferencia: tipo === 'mensal' ? configGeral.anoAtivoMensal : (anoData || new Date().getFullYear()),
         dataReferencia: tipoUsaData(tipo) ? dataContagem : null,
         turno: tipo === 'perdas' ? turno : null,
+        localEstoqueId: tipo === 'perdas' ? (localEstoqueId || null) : null,
         itensEsperadosIds
       })
-      const unidade = unidades.find((u) => u.id === unidadeId)
+      const unidade = unidades.find((u) => u.id === unidadeId) || (tipo === 'perdas' ? unidades.find((u) => u.id === usuarioLogado.unidadeId) : undefined)
       const grupo = grupos.find((g) => g.id === grupoId)
-      onSessaoPronta({ sessao, unidade: tipoExigeLoja(tipo) ? unidade : null, grupo })
+      const local = tipo === 'perdas' ? locais.find((l) => l.id === localEstoqueId) : undefined
+      onSessaoPronta({ sessao, unidade: tipoExigeLoja(tipo) ? unidade : (tipo === 'perdas' ? unidade : null), grupo, local })
     } catch (e) {
       setErro(e.message)
     } finally {
@@ -219,6 +243,11 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
   }
 
   if (carregando) return <div className="screen"><p className="muted">Carregando…</p></div>
+
+  // Abre sozinho (ver useEffect acima) — não mostra formulário nenhum, só um instante de espera.
+  if (autoAbrindo && !erro && !sessaoAntigaDetectada) {
+    return <div className="screen"><p className="muted">Abrindo…</p></div>
+  }
 
   if (sessaoAntigaDetectada) {
     const dias = Math.floor(sessaoAntigaDetectada.horasAberta / 24)
@@ -362,6 +391,21 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
                 )}
 
                 {tipo === 'perdas' && (
+                  <div style={{ padding: 12, borderRadius: 10, border: localEstoqueId ? '1px solid var(--border)' : '2px solid var(--warning)', background: 'var(--surface-2)' }}>
+                    <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>
+                      Setor {!localEstoqueId && <span style={{ color: 'var(--warning)', fontWeight: 500 }}>— escolha antes de iniciar</span>}
+                    </label>
+                    <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
+                      <option value="">Selecione…</option>
+                      {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+                    </select>
+                    <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+                      Sem Setor padrão no seu cadastro ainda — fala com quem cuida do Administrativo pra não precisar escolher toda vez.
+                    </p>
+                  </div>
+                )}
+
+                {tipo === 'perdas' && (
                   <div style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface-2)' }}>
                     <label style={{ fontWeight: 700, fontSize: 15, display: 'block', marginBottom: 6 }}>Turno</label>
                     <div className="segmented">
@@ -390,6 +434,7 @@ export default function SelecaoUnidade({ usuarioLogado, tipoFixo, onSessaoPronta
                   disabled={
                     processando ||
                     (tipoExigeLoja(tipo) && !unidadeId) ||
+                    (tipo === 'perdas' && !localEstoqueId) ||
                     (POR_VALOR[tipo].usaGrupo && grupos.length === 0)
                   }
                 >

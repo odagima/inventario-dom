@@ -132,7 +132,7 @@ export async function listarProdutosParaMensal() {
 // (que continua sendo o timestamp real de criação, usado pra detectar sessão travada/antiga).
 // turno (opcional, 'almoco' | 'jantar'): só usado no registro de perdas, que é lançado uma vez por
 // turno no fim do expediente (ver migration_v13.sql). Fica na sessão, não no item.
-export async function iniciarSessao({ unidadeId, usuario, tipo, grupoId, mesReferencia, anoReferencia, dataReferencia, turno, itensEsperadosIds }) {
+export async function iniciarSessao({ unidadeId, usuario, tipo, grupoId, mesReferencia, anoReferencia, dataReferencia, turno, localEstoqueId, itensEsperadosIds }) {
   const base = {
     unidade_id: unidadeId || null, // contagem semanal não exige loja (ver migration_v6.sql)
     usuario,
@@ -143,8 +143,8 @@ export async function iniciarSessao({ unidadeId, usuario, tipo, grupoId, mesRefe
   }
   // Campos que dependem de migração: se a coluna ainda não existir no Supabase, a inserção é
   // repetida sem ela em vez de travar a criação da sessão inteira. `data_referencia` veio na
-  // migration_v4; `turno`, na v13.
-  const opcionais = { data_referencia: dataReferencia || null, turno: turno || null }
+  // migration_v4; `turno`, na v13; `local_estoque_id` (Setor), na v25.
+  const opcionais = { data_referencia: dataReferencia || null, turno: turno || null, local_estoque_id: localEstoqueId || null }
 
   let { data: sessao, error: erroSessao } = await supabase
     .from('sessoes_contagem').insert({ ...base, ...opcionais }).select().single()
@@ -263,9 +263,12 @@ export async function buscarConfiguracaoGeral() {
 // guarda-corpo: sem escopo e sem intenção explícita, a consulta pegaria a sessão aberta de
 // qualquer loja) — quem precisa de busca sem escopo pede de propósito e fica responsável por
 // informar dia/turno, que é o que isola a sessão nesse caso.
-export async function buscarSessaoEmAndamento({ unidadeId, grupoId, tipo, usuario, dataReferencia, turno, semEscopo = false }) {
+export async function buscarSessaoEmAndamento({ unidadeId, grupoId, tipo, usuario, dataReferencia, turno, localEstoqueId, semEscopo = false }) {
   if (!usuario) throw new Error('buscarSessaoEmAndamento precisa de `usuario` — não dá pra isolar sessão sem saber quem está logado.')
-  function montar({ comTurno }) {
+  // `localEstoqueId` (Setor, migration_v25) entra no escopo de quem já tem turno (hoje só Perdas,
+  // via `semEscopo`) — trocar de setor manualmente pra "só esse lançamento" precisa abrir uma
+  // sessão PRÓPRIA, não reaproveitar a de um setor diferente só porque é o mesmo dia/turno.
+  function montar({ comTurno, comLocal }) {
     let query = supabase
       .from('sessoes_contagem')
       .select('*')
@@ -277,14 +280,19 @@ export async function buscarSessaoEmAndamento({ unidadeId, grupoId, tipo, usuari
     else if (!semEscopo) return null
     if (dataReferencia) query = query.eq('data_referencia', dataReferencia)
     if (comTurno && turno) query = query.eq('turno', turno)
+    if (comLocal && localEstoqueId) query = query.eq('local_estoque_id', localEstoqueId)
     return query.order('iniciada_em', { ascending: false }).limit(1).maybeSingle()
   }
-  const consulta = montar({ comTurno: true })
+  const consulta = montar({ comTurno: true, comLocal: true })
   if (!consulta) return null
   let { data, error } = await consulta
   // migration_v13.sql ainda não rodou: procura sem filtrar por turno em vez de travar a tela.
   if (error && colunaNaoExiste(error, 'turno')) {
-    ;({ data, error } = await montar({ comTurno: false }))
+    ;({ data, error } = await montar({ comTurno: false, comLocal: true }))
+  }
+  // migration_v25.sql ainda não rodou: procura sem filtrar por setor.
+  if (error && colunaNaoExiste(error, 'local_estoque_id')) {
+    ;({ data, error } = await montar({ comTurno: true, comLocal: false }))
   }
   if (error) throw error
   return data
@@ -311,6 +319,23 @@ export async function finalizarSessao(sessaoId, usuarioFinalizou) {
       .from('sessoes_contagem')
       .update({ status: 'finalizada', finalizada_em: new Date().toISOString() })
       .eq('id', sessaoId)
+    if (erroSemColuna) throw erroSemColuna
+    return
+  }
+  if (error) throw error
+}
+
+// Troca Loja/Setor de UMA sessão já aberta (cabeçalho de Perdas, 08/10/2026, pedido do Felipe:
+// "deixar possível alterar loja e local... vem um popup de confirmação") — vale só esse
+// lançamento (a tela já confirma antes de chamar isso), nunca muda o cadastro da pessoa.
+export async function atualizarContextoSessao(sessaoId, { unidadeId, localEstoqueId }) {
+  const { error } = await supabase
+    .from('sessoes_contagem')
+    .update({ unidade_id: unidadeId ?? null, local_estoque_id: localEstoqueId ?? null })
+    .eq('id', sessaoId)
+  if (error && colunaNaoExiste(error, 'local_estoque_id')) {
+    const { error: erroSemColuna } = await supabase
+      .from('sessoes_contagem').update({ unidade_id: unidadeId ?? null }).eq('id', sessaoId)
     if (erroSemColuna) throw erroSemColuna
     return
   }

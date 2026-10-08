@@ -237,7 +237,7 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
           {!contexto ? (
             <SelecaoUnidade usuarioLogado={usuarioLogado} tipoFixo={tipoFixoContagem} onSessaoPronta={setContexto} onVoltar={fecharContagem} />
           ) : contexto.sessao?.tipo === 'perdas' ? (
-            <TelaPerdas sessao={contexto.sessao} unidade={contexto.unidade} usuarioLogado={usuarioLogado} onFinalizar={fecharContagem} onSair={fecharContagem} />
+            <TelaPerdas sessao={contexto.sessao} unidade={contexto.unidade} local={contexto.local} usuarioLogado={usuarioLogado} onFinalizar={fecharContagem} onSair={fecharContagem} />
           ) : (
             <TelaContagem sessao={contexto.sessao} unidade={contexto.unidade} grupo={contexto.grupo} usuarioLogado={usuarioLogado} onFinalizar={fecharContagem} onSair={fecharContagem} />
           )}
