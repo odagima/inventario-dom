@@ -117,7 +117,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
         titulo="Produção"
         subtitulo={
           tela === 'painel' ? 'o que está sendo produzido'
-            : tela === 'abrir' ? 'nova produção'
+            : tela === 'abrir' ? (prefill?.planejadaId ? 'iniciar planejada' : 'nova produção')
             : tela === 'planejar' ? 'planejar o que falta produzir'
             : 'acompanhar a produção'
         }
@@ -264,7 +264,6 @@ function FormPlanejar({ usuario, onPronto }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Planejar produção</p>
       <div>
         <label className="muted">Setor</label>
         <select value={localEstoqueId} onChange={(e) => setLocalEstoqueId(e.target.value)}>
@@ -354,8 +353,6 @@ function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>{prefill?.planejadaId ? 'Iniciar planejada' : 'Nova produção'}</p>
-
       {!prefill?.planejadaId && (
         <ContextoLancamento
           setor={localAtual?.nome || 'sem setor'}
