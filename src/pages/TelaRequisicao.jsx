@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
-import Icon from '../components/Icon'
 import Modal from '../components/Modal'
+import ContextoLancamento from '../components/ContextoLancamento'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
@@ -24,6 +24,10 @@ function fmt(n, casas = 3) {
   const x = Number(n)
   if (!isFinite(x)) return '—'
   return x.toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas })
+}
+
+function hojeFormatado() {
+  return new Date().toLocaleDateString('pt-BR')
 }
 
 export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = false }) {
@@ -104,6 +108,12 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
   const [quantidade, setQuantidade] = useState('')
   const [disponivel, setDisponivel] = useState(null)
   const [salvando, setSalvando] = useState(false)
+  // Pedido do Felipe (08/10/2026, "eu quero que apareça TODA a informação no cabeçalho" — circulou
+  // o cartão de Perdas inteiro): Requisição também usa o cartão padrão agora. Como ela mexe em DOIS
+  // locais (não um Setor só), origem/destino entram no lugar de Setor, e trocar cada um abre um
+  // popup simples (sem confirmação de 2 passos — nada foi salvo ainda, é só o rascunho do formulário).
+  const [trocandoOrigem, setTrocandoOrigem] = useState(false)
+  const [trocandoDestino, setTrocandoDestino] = useState(false)
   // Pedido do Felipe (08/10/2026, print do celular): depois de enviar, confirmar com um popup de
   // verdade (igual ao resto do app) em vez de só uma frase verde — e perguntar se quer lançar outra
   // (mantém a tela, limpa só o item/quantidade) ou já fechar tudo (volta pra Home).
@@ -180,23 +190,34 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
           : 'Quem manda já tem o material em mãos — só o destino confirma recebimento.'}
       </p>
 
-      <div style={{ display: 'flex', gap: 10, alignItems: 'end' }}>
-        <div style={{ flex: 1 }}>
-          <label className="muted">De (origem)</label>
-          <select value={origemId} onChange={(e) => setOrigemId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
-          </select>
-        </div>
-        <button type="button" className="ghost" onClick={inverter} title="Inverter" style={{ flexShrink: 0 }}><Icon nome="arrows-exchange" tamanho={18} /></button>
-        <div style={{ flex: 1 }}>
-          <label className="muted">Para (destino)</label>
-          <select value={destinoId} onChange={(e) => setDestinoId(e.target.value)}>
-            <option value="">Selecione…</option>
-            {locais.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
-          </select>
-        </div>
-      </div>
+      <ContextoLancamento
+        origem={locais.find((l) => l.id === origemId)?.nome || 'sem setor'}
+        destino={locais.find((l) => l.id === destinoId)?.nome || 'sem setor'}
+        data={hojeFormatado()}
+        usuario={usuario}
+        onTrocarOrigem={() => setTrocandoOrigem(true)}
+        onTrocarDestino={() => setTrocandoDestino(true)}
+        onInverter={inverter}
+      />
+
+      {trocandoOrigem && (
+        <PopupEscolherLocal
+          titulo="Trocar origem (De)"
+          locais={locais}
+          valorId={origemId}
+          onFechar={() => setTrocandoOrigem(false)}
+          onConfirmar={(id) => { setOrigemId(id); setTrocandoOrigem(false) }}
+        />
+      )}
+      {trocandoDestino && (
+        <PopupEscolherLocal
+          titulo="Trocar destino (Para)"
+          locais={locais}
+          valorId={destinoId}
+          onFechar={() => setTrocandoDestino(false)}
+          onConfirmar={(id) => { setDestinoId(id); setTrocandoDestino(false) }}
+        />
+      )}
 
       <BuscaProduto onSelecionar={setProduto} mostrarCamera={false} />
       {produto && (
@@ -240,6 +261,28 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
         </Modal>
       )}
     </div>
+  )
+}
+
+// Popup simples de 1 passo (sem confirmação extra) — trocar origem/destino aqui é só rascunho do
+// formulário, nada foi salvo ainda (diferente do TrocarLocalModal de Perdas/Produção/Recebimento,
+// que troca o Setor de uma sessão JÁ aberta e por isso pede confirmação em 2 passos).
+function PopupEscolherLocal({ titulo, locais, valorId, onFechar, onConfirmar }) {
+  const [id, setId] = useState(valorId || '')
+  return (
+    <Modal onFechar={onFechar} largura={320}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>{titulo}</p>
+        <select value={id} onChange={(e) => setId(e.target.value)}>
+          <option value="">Selecione…</option>
+          {locais.map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onFechar} style={{ flex: 1 }}>Cancelar</button>
+          <button className="primary" onClick={() => onConfirmar(id)} disabled={!id} style={{ flex: 1 }}>Confirmar</button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
