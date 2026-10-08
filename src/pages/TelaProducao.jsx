@@ -119,12 +119,11 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
   return (
     <div className="screen">
       <Topbar
-        titulo="Produção"
-        subtitulo={
-          tela === 'painel' ? 'o que está sendo produzido'
-            : tela === 'abrir' ? (prefill?.planejadaId ? 'iniciar planejada' : 'nova produção')
-            : tela === 'planejar' ? 'planejar o que falta produzir'
-            : 'acompanhar a produção'
+        titulo={
+          tela === 'painel' ? 'Produção'
+            : tela === 'abrir' ? (prefill?.planejadaId ? 'Iniciar planejada' : 'Nova produção')
+            : tela === 'planejar' ? 'Planejar produção'
+            : 'Acompanhar produção'
         }
         onVoltar={tela === 'painel' ? onSair : () => { setTela('painel'); setProcessoRaizId(null); setPrefill(null); carregar() }}
         acoes={(tela === 'abrir' || tela === 'planejar') ? [
