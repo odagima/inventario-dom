@@ -11,6 +11,7 @@ export default function BuscaProdutoPerda({ categoria, onSelecionar }) {
   const [buscando, setBuscando] = useState(false)
   const [erro, setErro] = useState('')
   const debounceRef = useRef(null)
+  const resultadosRef = useRef(null)
 
   // Trocar de categoria limpa o que estava digitado — senão a lista some sem explicação (os
   // resultados da categoria anterior não valem mais) e parece que a busca quebrou.
@@ -35,6 +36,12 @@ export default function BuscaProdutoPerda({ categoria, onSelecionar }) {
     }, 250) // debounce: evita uma query a cada tecla
     return () => clearTimeout(debounceRef.current)
   }, [termo, categoria])
+
+  // Queixa do Felipe (08/10/2026, print do celular): lista de resultados cortada sem espaço pra
+  // ver — rola o popup sozinho assim que a lista aparece (ver mesmo comentário em BuscaProduto.jsx).
+  useEffect(() => {
+    if (resultados.length > 0) resultadosRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [resultados])
 
   function handleSelecionar(produto) {
     setTermo('')
@@ -62,7 +69,7 @@ export default function BuscaProdutoPerda({ categoria, onSelecionar }) {
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{erro}</p>}
 
       {resultados.length > 0 && (
-        <div className="card" style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, padding: 0, zIndex: 10, maxHeight: 260, overflowY: 'auto' }}>
+        <div ref={resultadosRef} className="card" style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, padding: 0, zIndex: 10, maxHeight: 260, overflowY: 'auto' }}>
           {resultados.map((p, i) => (
             <div
               key={p.id}

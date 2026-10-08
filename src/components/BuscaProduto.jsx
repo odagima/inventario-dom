@@ -7,6 +7,7 @@ export default function BuscaProduto({ onSelecionar, onAbrirCamera, mostrarCamer
   const [buscando, setBuscando] = useState(false)
   const debounceRef = useRef(null)
   const inputRef = useRef(null)
+  const resultadosRef = useRef(null)
 
   useEffect(() => {
     clearTimeout(debounceRef.current)
@@ -25,6 +26,15 @@ export default function BuscaProduto({ onSelecionar, onAbrirCamera, mostrarCamer
     }, 250) // debounce: evita uma query a cada tecla
     return () => clearTimeout(debounceRef.current)
   }, [termo])
+
+  // Queixa do Felipe (08/10/2026, print do celular): a lista de resultados é posicionada logo
+  // abaixo do campo, mas o popup em volta tem altura limitada (e rola) — se o campo estiver mais
+  // pra baixo no formulário (ou o teclado cobrir o resto), a lista ficava cortada sem jeito de ver
+  // o resto. Rola o popup sozinho assim que a lista aparece, trazendo ela pra dentro da área
+  // visível (nem precisa ela caber inteira — só começar visível já resolve).
+  useEffect(() => {
+    if (resultados.length > 0) resultadosRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [resultados])
 
   function handleSelecionar(produto) {
     setTermo('')
@@ -63,6 +73,7 @@ export default function BuscaProduto({ onSelecionar, onAbrirCamera, mostrarCamer
 
       {resultados.length > 0 && (
         <div
+          ref={resultadosRef}
           className="card"
           style={{
             position: 'absolute', top: '100%', left: 0, right: 46, marginTop: 4,
