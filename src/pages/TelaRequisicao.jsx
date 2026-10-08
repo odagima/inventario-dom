@@ -7,11 +7,9 @@ import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
 import {
   listarRequisicoesPendentes,
-  listarRequisicoesHistorico,
   criarRequisicao,
   atenderRequisicao,
   listarTransferenciasPendentes,
-  listarTransferenciasHistorico,
   criarTransferencia,
   confirmarRecebimentoTransferencia
 } from '../lib/requisicaoTransferenciaApi'
@@ -32,23 +30,20 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
   // (TelaRequisicao já é um popup da Home) — voltou a ser troca de conteúdo no MESMO popup, como
   // "processo" já funciona em Produção. `iniciarEmNova` é só pro atalho de "Abrir praça → Sim, vou
   // levar item" (TelaOperacao.jsx) cair direto no formulário, sem precisar achar o botão.
-  const [aba, setAba] = useState(iniciarEmNova ? 'nova' : 'pendentes') // 'nova' | 'pendentes' | 'historico'
+  const [aba, setAba] = useState(iniciarEmNova ? 'nova' : 'pendentes') // 'nova' | 'pendentes'
   const [tipo, setTipo] = useState('requisicao') // 'requisicao' | 'transferencia'
   const [locais, setLocais] = useState([])
   const [pendentesReq, setPendentesReq] = useState([])
   const [pendentesTransf, setPendentesTransf] = useState([])
-  const [historicoReq, setHistoricoReq] = useState([])
-  const [historicoTransf, setHistoricoTransf] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
 
   const carregar = useCallback(async () => {
     try {
-      const [f, pr, pt, hr, ht] = await Promise.all([
-        listarLocaisEstoque(), listarRequisicoesPendentes(), listarTransferenciasPendentes(),
-        listarRequisicoesHistorico(), listarTransferenciasHistorico()
+      const [f, pr, pt] = await Promise.all([
+        listarLocaisEstoque(), listarRequisicoesPendentes(), listarTransferenciasPendentes()
       ])
-      setLocais(f); setPendentesReq(pr); setPendentesTransf(pt); setHistoricoReq(hr); setHistoricoTransf(ht)
+      setLocais(f); setPendentesReq(pr); setPendentesTransf(pt)
       setErro('')
     } catch (e) {
       setErro('Não consegui carregar — ' + e.message)
@@ -63,7 +58,6 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
     <div className="screen">
       <Topbar
         titulo="Requisição / Transferência"
-        subtitulo={aba === 'nova' ? 'nova requisição ou transferência' : 'pedir e mandar material entre setores'}
         onVoltar={aba === 'nova' ? () => setAba('pendentes') : onSair}
       />
 
@@ -71,7 +65,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
 
       {aba === 'nova' ? (
         // Não fecha/volta sozinho ao enviar — fica aqui pra lançar vários seguidos, só atualiza
-        // pendentes/histórico por baixo. "Voltar" (Topbar acima) é que leva pra lista.
+        // pendentes por baixo. "Voltar" (Topbar acima) é que leva pra lista.
         <FormNova
           locais={locais} tipo={tipo} setTipo={setTipo}
           usuario={usuarioLogado?.nome}
@@ -84,27 +78,12 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
             + Nova requisição/transferência
           </button>
 
-          <div className="segmented" style={{ marginBottom: 14 }}>
-            <button onClick={() => setAba('pendentes')} className={aba === 'pendentes' ? 'active' : ''}>
-              Pendentes{(pendentesReq.length + pendentesTransf.length) > 0 ? ` (${pendentesReq.length + pendentesTransf.length})` : ''}
-            </button>
-            <button onClick={() => setAba('historico')} className={aba === 'historico' ? 'active' : ''}>Histórico</button>
-          </div>
-
           {carregando ? <p className="muted">Carregando…</p> : (
-            <>
-              {aba === 'pendentes' && (
-                <Pendentes
-                  pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
-                  usuario={usuarioLogado?.nome} usuarioLogado={usuarioLogado}
-                  onMudou={carregar} onErro={setErro}
-                />
-              )}
-
-              {aba === 'historico' && (
-                <Historico historicoReq={historicoReq} historicoTransf={historicoTransf} />
-              )}
-            </>
+            <Pendentes
+              pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
+              usuario={usuarioLogado?.nome} usuarioLogado={usuarioLogado}
+              onMudou={carregar} onErro={setErro}
+            />
           )}
         </>
       )}
@@ -268,11 +247,18 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
     }
   }
 
+  // Pedido do Felipe (08/10/2026): duas seções mostrando "Nada pendente." repetido era sem
+  // sentido — só aparece o que de fato tem alguma coisa; se não tiver nada em lugar nenhum, UMA
+  // mensagem só.
+  if (pendentesReq.length === 0 && pendentesTransf.length === 0) {
+    return <p className="muted">Nada pendente no momento.</p>
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div>
-        <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Requisições aguardando atendimento</p>
-        {pendentesReq.length === 0 ? <p className="muted">Nada pendente.</p> : (
+      {pendentesReq.length > 0 && (
+        <div>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Requisições aguardando atendimento</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {pendentesReq.map((r) => {
               const restante = Number(r.quantidade_solicitada) - Number(r.quantidade_atendida || 0)
@@ -298,12 +284,12 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
               )
             })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      <div>
-        <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Transferências aguardando recebimento</p>
-        {pendentesTransf.length === 0 ? <p className="muted">Nada pendente.</p> : (
+      {pendentesTransf.length > 0 && (
+        <div>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Transferências aguardando recebimento</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {pendentesTransf.map((t) => (
               <div key={t.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -312,33 +298,9 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
               </div>
             ))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function Historico({ historicoReq, historicoTransf }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div>
-        <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Requisições</p>
-        {historicoReq.length === 0 ? <p className="muted">Nenhuma ainda.</p> : historicoReq.map((r) => (
-          <div key={r.id} className="list-item">
-            <span>{r.solicitante?.nome} ← {r.atendente?.nome} · {fmt(r.quantidade_atendida || 0)}/{fmt(r.quantidade_solicitada)} {r.codigo_everest}</span>
-            <span className="muted">{r.status}</span>
-          </div>
-        ))}
-      </div>
-      <div>
-        <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Transferências</p>
-        {historicoTransf.length === 0 ? <p className="muted">Nenhuma ainda.</p> : historicoTransf.map((t) => (
-          <div key={t.id} className="list-item">
-            <span>{t.origem?.nome} → {t.destino?.nome} · {fmt(t.quantidade)} {t.codigo_everest}</span>
-            <span className="muted">{t.status}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
