@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import BuscaProduto from '../components/BuscaProduto'
 import Topbar from '../components/Topbar'
 import Icon from '../components/Icon'
+import Modal from '../components/Modal'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
@@ -71,6 +72,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
           usuario={usuarioLogado?.nome}
           localPadraoId={usuarioLogado?.localPadraoId}
           onPronto={carregar}
+          onSair={onSair}
         />
       ) : (
         <>
@@ -91,7 +93,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
   )
 }
 
-function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
+function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onSair }) {
   // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): o lado que
   // representa "quem está agindo" (quem pede, numa requisição; quem manda, numa transferência)
   // já entra com o Setor padrão da pessoa — só o OUTRO lado precisa ser escolhido. Requisição e
@@ -102,7 +104,10 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
   const [quantidade, setQuantidade] = useState('')
   const [disponivel, setDisponivel] = useState(null)
   const [salvando, setSalvando] = useState(false)
-  const [msg, setMsg] = useState('')
+  // Pedido do Felipe (08/10/2026, print do celular): depois de enviar, confirmar com um popup de
+  // verdade (igual ao resto do app) em vez de só uma frase verde — e perguntar se quer lançar outra
+  // (mantém a tela, limpa só o item/quantidade) ou já fechar tudo (volta pra Home).
+  const [concluido, setConcluido] = useState(null) // null | mensagem de sucesso
   const [erro, setErro] = useState('')
 
   // Troca de tipo muda qual lado é "quem está agindo" — preenche o lado certo se ainda não tiver
@@ -129,29 +134,38 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
 
   async function enviar() {
     setSalvando(true)
-    setMsg('')
     setErro('')
     try {
+      let mensagem
       if (tipo === 'requisicao') {
         const resultado = await criarRequisicao({
           localSolicitanteId: destinoId, localAtendenteId: origemId,
           codigoEverest: produto.codigo_everest, quantidadeSolicitada: qtd, usuario
         })
-        setMsg(resultado.autoAtendida ? 'Requisição atendida na hora.' : 'Requisição enviada — aguardando o local de origem atender.')
+        mensagem = resultado.autoAtendida ? 'Requisição atendida na hora.' : 'Requisição enviada — aguardando o local de origem atender.'
       } else {
         await criarTransferencia({
           localOrigemId: origemId, localDestinoId: destinoId,
           codigoEverest: produto.codigo_everest, quantidade: qtd, usuario
         })
-        setMsg('Transferência enviada — aguardando o destino confirmar recebimento.')
+        mensagem = 'Transferência enviada — aguardando o destino confirmar recebimento.'
       }
-      setQuantidade('')
+      setConcluido(mensagem)
       onPronto()
     } catch (e) {
       setErro('Não consegui enviar — ' + e.message)
     } finally {
       setSalvando(false)
     }
+  }
+
+  // "Sim, fazer outra": limpa só o item/quantidade — origem e destino costumam valer pro próximo
+  // item também (ex.: levando vários itens pra mesma praça de uma vez).
+  function fazerOutra() {
+    setConcluido(null)
+    setProduto(null)
+    setQuantidade('')
+    setDisponivel(null)
   }
 
   return (
@@ -199,7 +213,6 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
         </div>
       )}
 
-      {msg && <p style={{ fontSize: 13, color: 'var(--success)' }}>{msg}</p>}
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{erro}</p>}
 
       <button
@@ -210,6 +223,22 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
       >
         {salvando ? 'Enviando…' : 'Enviar'}
       </button>
+
+      {concluido && (
+        <Modal onFechar={onSair} largura={340}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>
+              {tipo === 'requisicao' ? 'Requisição enviada com sucesso!' : 'Transferência enviada com sucesso!'}
+            </p>
+            <p className="muted" style={{ margin: 0 }}>{concluido}</p>
+            <p style={{ margin: 0 }}>Quer fazer outra requisição/transferência?</p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={onSair} style={{ flex: 1 }}>Não, fechar</button>
+              <button className="primary" onClick={fazerOutra} style={{ flex: 1 }}>Sim, fazer outra</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
