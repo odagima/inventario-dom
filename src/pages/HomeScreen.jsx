@@ -21,8 +21,9 @@ import { podeVer } from '../lib/permissoes'
 // dentro da lista de tipos) — entra direto na Contagem com o tipo já fixado (ver
 // SelecaoUnidade.jsx `tipoFixo`), sem passar pela lista "o que você vai fazer".
 //
-// "Trocar usuário" saiu do rodapé e virou ícone no canto superior direito do cabeçalho — pede
-// confirmação num popup (ver Modal.jsx) antes de sair, pra não trocar sem querer num toque perdido.
+// "Trocar usuário" (08/10/2026, 2ª rodada — "aquela parte da troca de usuário eu não gostei"):
+// voltou a ser um botão de verdade no rodapé, escrito por extenso. O canto superior direito do
+// cabeçalho (onde o pílula "Trocar" vivia) virou o indicador de praça aberta, abaixo.
 //
 // 07/10/2026 (pedido do Felipe): "transformar todos os botões em popup" — Contagem, Perdas,
 // Produção, Requisição e Operação deixaram de navegar pra uma página própria (`App.jsx` não troca
@@ -37,6 +38,10 @@ import { podeVer } from '../lib/permissoes'
 // tudo). A permissão hoje só distingue "lança" (`contagens.lancar`, cobre Contagem/Perdas/
 // Produção/Requisição/Abrir praça/Recebimento — ainda é uma permissão só, o catálogo de perfis não
 // tem uma por tela) de "só vê" (`contagens.ver`, o Painel de controle).
+//
+// 08/10/2026, 2ª rodada ("está tudo centralizado no meio... precisa ser adaptativo"): tirado o
+// `justifyContent: center` do `.screen` — o conteúdo cresce a partir do topo, como as outras
+// telas, em vez de flutuar no meio da tela com espaço vazio em volta.
 export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEntrarAcompanhamento, onAbrirCadastro, onAbrirAdmin, onSair }) {
   const nivel = usuarioLogado.nivelAcesso
   const podeCadastro = nivel === 'administrativo' || nivel === 'estoque_compras'
@@ -165,21 +170,23 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
   ]
 
   return (
-    <div className="screen" style={{ justifyContent: 'center' }}>
+    <div className="screen">
       <div className="app-header" style={{ position: 'relative', textAlign: 'center' }}>
-        {/* Ícone sozinho (sem rótulo) testou "pouco intuitivo" — virou pílula com texto, mesma
-            cor/transparência do ícone circular das outras telas, só mais larga. */}
-        <button
-          onClick={() => setConfirmandoTroca(true)}
-          style={{
-            position: 'absolute', top: 0, right: 0, display: 'flex', alignItems: 'center', gap: 5,
-            background: 'rgba(255,255,255,0.14)', color: 'var(--header-text)', border: 'none',
-            borderRadius: 20, padding: '7px 12px 7px 10px', fontSize: 12.5, fontWeight: 500, cursor: 'pointer'
-          }}
-        >
-          <Icon nome="user" tamanho={14} />
-          Trocar
-        </button>
+        {localFixoId && turnoDoLocalFixo && (
+          <span
+            style={{
+              position: 'absolute', top: 0, right: 0, display: 'flex', alignItems: 'center', gap: 6,
+              background: 'rgba(255,255,255,0.14)', color: 'var(--header-text)',
+              borderRadius: 20, padding: '7px 12px', fontSize: 12.5, fontWeight: 500
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: turnoVencido(turnoDoLocalFixo) ? 'var(--warning)' : 'var(--success)'
+            }} />
+            {usuarioLogado.localPadraoNome} aberta
+          </span>
+        )}
         <p className="brand">Grupo DOM</p>
         <p className="subtitle">Olá, {usuarioLogado.nome}</p>
       </div>
@@ -189,6 +196,15 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
           <IconTile key={t.key} icone={t.icone} cor={t.cor} label={t.label} bolinha={t.bolinha} onClick={t.onClick} />
         ))}
       </div>
+
+      <button
+        onClick={() => setConfirmandoTroca(true)}
+        className="ghost"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', marginTop: 18 }}
+      >
+        <Icon nome="user" tamanho={16} />
+        Trocar usuário
+      </button>
 
       {confirmandoTroca && (
         <Modal onFechar={() => setConfirmandoTroca(false)} largura={300}>

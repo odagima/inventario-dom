@@ -5,7 +5,6 @@ import Icon from '../components/Icon'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
-import { turnoUtilizavel } from '../lib/turnosApi'
 import {
   listarRequisicoesPendentes,
   listarRequisicoesHistorico,
@@ -154,9 +153,6 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
     setMsg('')
     setErro('')
     try {
-      const localQuemAge = tipo === 'requisicao' ? destinoId : origemId
-      const turno = await turnoUtilizavel(localQuemAge)
-      if (!turno) throw new Error('Essa praça não está aberta — abra em "Abrir/Fechar praça" antes de lançar.')
       if (tipo === 'requisicao') {
         const resultado = await criarRequisicao({
           localSolicitanteId: destinoId, localAtendenteId: origemId,

@@ -13,7 +13,13 @@ import { criarTransferenciaImediata } from './requisicaoTransferenciaApi'
 // Trava das 3h (pedido do Felipe, 07/10/2026): "se esquecer aberto, depois das 3h da manhã não
 // consegue mais lançar no dia anterior, só fechando e abrindo um novo turno." `turnoVencido`
 // calcula isso no cliente (não trava no banco) — fácil de ajustar o horário de corte sem migração.
-// Um turno vencido só pode ser FECHADO, nunca usado pra lançar.
+// Um turno vencido só pode ser FECHADO, nunca ABERTO de novo (essa trava é só sobre o turno em
+// si — abrir/fechar a praça — e continua valendo).
+//
+// 08/10/2026 (pedido do Felipe, revendo a trava anterior): turno NÃO trava mais Produção/
+// Requisição/Transferência — "aqui é um controle, não é um impeditivo da pessoa pegar. Se não ela
+// vai pegar e não vai anotar." Virou só rastreio/status (alimenta o Painel de Controle), não
+// bloqueia lançamento de ninguém. `turnoUtilizavel` (que fazia essa trava) foi removida.
 
 export async function buscarTurnoAberto(localEstoqueId) {
   const { data, error } = await supabase
@@ -115,13 +121,4 @@ export async function fecharTurno({ turnoId, localDestinoId, itens, usuario }) {
     .update({ status: 'fechado', fechado_em: new Date().toISOString(), fechado_por: usuario || null })
     .eq('id', turnoId)
   if (error) throw error
-}
-
-// Usado pelas telas de lançamento (Produção, Requisição) pra travar sem turno aberto — pedido do
-// Felipe: "se não abrir, não consegue lançar". Devolve o turno utilizável, ou null (sem turno /
-// turno vencido — os dois casos bloqueiam igual, a mensagem é que muda).
-export async function turnoUtilizavel(localEstoqueId) {
-  const turno = await buscarTurnoAberto(localEstoqueId)
-  if (!turno || turnoVencido(turno)) return null
-  return turno
 }

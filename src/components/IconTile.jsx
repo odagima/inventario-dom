@@ -15,8 +15,10 @@ const FUNDO_SUAVE = {
 // Pensado pra reaparecer em mais de uma tela (Home primeiro; Contagem/Requisição depois, mesmo
 // padrão), por isso vive em `components`, não dentro de uma página só.
 //
-// `bolinha` (07/10/2026, pedido do Felipe, Abrir/Fechar praça): cor opcional de uma bolinha no
-// canto — verde = pode abrir, vermelha = já está aberta (fechar). Sem a prop, o tile fica igual.
+// `bolinha` (07/10/2026, pedido do Felipe, Abrir/Fechar praça): cor opcional de uma bolinha
+// grudada no ícone — verde = pode abrir, vermelha = já está aberta (fechar). Sem a prop, o tile
+// fica igual. 08/10/2026 (2ª rodada): a bolinha morava no canto do TILE inteiro — "precisa ficar
+// próxima ao ícone do relógio" — passou a ficar no canto do círculo do ícone, não do botão todo.
 //
 // 08/10/2026 (pedido do Felipe, "precisa ser bacana" + "tamanho fixo, não deixa adaptar pela
 // palavra"): ícone ganhou fundo colorido (mesmo truque já usado nos motivos de Perdas) e o tile
@@ -24,17 +26,17 @@ const FUNDO_SUAVE = {
 // dentro da mesma altura, nunca estica o tile.
 export default function IconTile({ icone, label, cor, onClick, bolinha }) {
   return (
-    <button onClick={onClick} className="icon-tile" style={{ position: 'relative' }}>
-      {bolinha && (
-        <span
-          style={{
-            position: 'absolute', top: 10, left: 10, width: 9, height: 9,
-            borderRadius: '50%', background: bolinha, boxShadow: '0 0 0 2px var(--surface)'
-          }}
-        />
-      )}
-      <span className="icon-tile-bolha" style={{ background: FUNDO_SUAVE[cor] || 'var(--surface-2)' }}>
+    <button onClick={onClick} className="icon-tile">
+      <span className="icon-tile-bolha" style={{ background: FUNDO_SUAVE[cor] || 'var(--surface-2)', position: 'relative' }}>
         <Icon nome={icone} cor={cor} tamanho={21} />
+        {bolinha && (
+          <span
+            style={{
+              position: 'absolute', top: -2, right: -2, width: 10, height: 10,
+              borderRadius: '50%', background: bolinha, boxShadow: '0 0 0 2px var(--surface)'
+            }}
+          />
+        )}
       </span>
       <span>{label}</span>
     </button>
