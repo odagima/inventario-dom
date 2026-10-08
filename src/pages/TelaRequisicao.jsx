@@ -76,6 +76,7 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
         <FormNova
           locais={locais} tipo={tipo} setTipo={setTipo}
           usuario={usuarioLogado?.nome}
+          localPadraoId={usuarioLogado?.localPadraoId}
           onPronto={carregar}
         />
       ) : (
@@ -112,15 +113,28 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
   )
 }
 
-function FormNova({ locais, tipo, setTipo, usuario, onPronto }) {
-  const [origemId, setOrigemId] = useState('')
-  const [destinoId, setDestinoId] = useState('')
+function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto }) {
+  // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): o lado que
+  // representa "quem está agindo" (quem pede, numa requisição; quem manda, numa transferência)
+  // já entra com o Setor padrão da pessoa — só o OUTRO lado precisa ser escolhido. Requisição e
+  // Transferência são operação entre DOIS locais, então só dá pra automatizar um lado.
+  const [origemId, setOrigemId] = useState(tipo === 'transferencia' ? (localPadraoId || '') : '')
+  const [destinoId, setDestinoId] = useState(tipo === 'requisicao' ? (localPadraoId || '') : '')
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
   const [disponivel, setDisponivel] = useState(null)
   const [salvando, setSalvando] = useState(false)
   const [msg, setMsg] = useState('')
   const [erro, setErro] = useState('')
+
+  // Troca de tipo muda qual lado é "quem está agindo" — preenche o lado certo se ainda não tiver
+  // sido escolhido (nunca sobrescreve o que a pessoa já mexeu).
+  useEffect(() => {
+    if (!localPadraoId) return
+    if (tipo === 'requisicao' && !destinoId) setDestinoId(localPadraoId)
+    if (tipo === 'transferencia' && !origemId) setOrigemId(localPadraoId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipo])
 
   const qtd = Number(String(quantidade).replace(',', '.'))
 

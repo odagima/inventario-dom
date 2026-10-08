@@ -14,9 +14,12 @@ function agora() {
 // NF (se tiver), data (automático), horário (automático), item (apenas insumos base, matéria-
 // prima), e quantidade." Data/horário não são campos editáveis de propósito — é "chegou agora",
 // não um lançamento retroativo como Perdas/Contagem.
-export default function RecebimentoForm({ usuario, onPronto, onErro }) {
+export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onErro }) {
   const [locais, setLocais] = useState([])
-  const [localEstoqueId, setLocalEstoqueId] = useState('')
+  // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): quem tem Setor
+  // padrão vinculado já entra com o local certo — ainda dá pra trocar no select, é escolha de uma
+  // vez só (não um cabeçalho de sessão, como Perdas).
+  const [localEstoqueId, setLocalEstoqueId] = useState(localPadraoId || '')
   const [fornecedor, setFornecedor] = useState('')
   const [numeroNota, setNumeroNota] = useState('')
   const [produto, setProduto] = useState(null)

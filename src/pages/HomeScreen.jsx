@@ -205,6 +205,7 @@ export default function HomeScreen({ usuarioLogado, onEntrarProdutividade, onEnt
         <Modal onFechar={() => setMostrandoRecebimento(false)} largura={360}>
           <RecebimentoForm
             usuario={usuarioLogado?.nome}
+            localPadraoId={usuarioLogado?.localPadraoId}
             onPronto={() => setMostrandoRecebimento(false)}
             onErro={setErroRecebimento}
           />

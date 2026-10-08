@@ -215,6 +215,7 @@ export default function TelaProducao({ usuarioLogado, onSair }) {
       {tela === 'abrir' && (
         <FormAbrir
           usuario={usuarioLogado?.nome}
+          localPadraoId={usuarioLogado?.localPadraoId}
           prefill={prefill}
           onPronto={async () => { await carregar(); setTela('painel'); setPrefill(null) }}
         />
@@ -307,10 +308,14 @@ function FormPlanejar({ usuario, onPronto }) {
 }
 
 // ── Abrir: a entrada ("o que eu peguei") + o local de estoque ────────────────────────────────
-function FormAbrir({ usuario, prefill, onPronto }) {
+function FormAbrir({ usuario, localPadraoId, prefill, onPronto }) {
   const [data, setData] = useState(hojeIso())
   const [locais, setLocais] = useState([])
-  const [localEstoqueId, setLocalEstoqueId] = useState(prefill?.localEstoqueId || '')
+  // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): quem tem Setor
+  // padrão vinculado já entra com o local certo escolhido — ainda dá pra trocar no próprio select,
+  // sem popup de confirmação (diferente de Perdas: aqui é escolha de uma vez só, não um cabeçalho
+  // de sessão em andamento).
+  const [localEstoqueId, setLocalEstoqueId] = useState(prefill?.localEstoqueId || localPadraoId || '')
   const [categoria, setCategoria] = useState(CATEGORIAS[0])
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
