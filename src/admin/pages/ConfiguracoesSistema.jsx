@@ -13,7 +13,10 @@ export default function ConfiguracoesSistema({ usuario }) {
 
   useEffect(() => {
     buscarConfiguracoes()
-      .then(setConfiguracoes)
+      // Essa tela só sabe lidar com interruptor liga/desliga (booleano) — uma config que guarda
+      // outra coisa (ex.: rotulos_sistema, que guarda um objeto) tem tela própria e não pode
+      // aparecer aqui, porque "alternar" reescreveria ela com true/false e apagaria o valor real.
+      .then((lista) => setConfiguracoes(lista.filter((c) => typeof c.valor === 'boolean')))
       .catch((e) => setErro('Não consegui carregar — ' + e.message))
       .finally(() => setCarregando(false))
   }, [])
