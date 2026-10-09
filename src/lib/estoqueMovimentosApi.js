@@ -1,4 +1,6 @@
 import { supabase } from './supabase'
+import { buscarProdutosPorCodigosEverest } from './api'
+import { buscarFatoresCorrecao, buscarDescendentes } from './fatoresCorrecaoApi'
 
 // Saldo calculado por local de estoque (migration_v15.sql, renomeado de "frente" na
 // migration_v19.sql) — ledger só de inserção, separado do saldo por contagem que já existe
@@ -78,6 +80,35 @@ export async function listarMovimentosRecentes(limite = 30) {
 // movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
 // (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra
 // a partir de uma data só corta o que é MOSTRADO depois, em `LocaisEstoque.jsx`.
+// Saldo virtual de um item JUNTO com todos os derivados dele (árvore de porcionamento, ver
+// `buscarDescendentes` em fatoresCorrecaoApi.js) — somado só nos `locaisAlvo` informados (quem
+// chama decide o recorte: todos os setores, só os de uma Loja, ou um Setor só). Usado tanto no
+// Admin (que soma preço depois) quanto no Painel de Controle operacional (só quantidade) — pra não
+// duplicar essa conta em dois lugares e um dia desalinhar.
+export async function buscarEstoqueVirtualComDerivados({ codigoEverestRaiz, locaisAlvo }) {
+  const [mapa, saldosPorLocal] = await Promise.all([
+    buscarFatoresCorrecao(),
+    Promise.all(locaisAlvo.map((l) => listarSaldosCalculados(l.id)))
+  ])
+
+  const saldoPorCodigo = {}
+  saldosPorLocal.forEach((linhas) => {
+    linhas.forEach((l) => { saldoPorCodigo[l.codigo_everest] = (saldoPorCodigo[l.codigo_everest] || 0) + Number(l.saldo) })
+  })
+
+  const descendentes = buscarDescendentes(mapa, codigoEverestRaiz)
+  const todosCodigos = [codigoEverestRaiz, ...descendentes]
+  const produtos = await buscarProdutosPorCodigosEverest(todosCodigos)
+  const nomePorCodigo = Object.fromEntries(produtos.map((p) => [p.codigo_everest, p.nome]))
+
+  return todosCodigos.map((codigo, i) => ({
+    codigo_everest: codigo,
+    nome: nomePorCodigo[codigo] || codigo,
+    raiz: i === 0,
+    saldo: saldoPorCodigo[codigo] || 0
+  }))
+}
+
 export async function buscarHistoricoMovimentos({ codigoEverest, localEstoqueId, dataFim }) {
   let q = supabase
     .from('estoque_movimentos')

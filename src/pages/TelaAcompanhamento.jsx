@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import Topbar from '../components/Topbar'
+import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
-import { listarSaldosCalculados, listarMovimentosRecentes } from '../lib/estoqueMovimentosApi'
+import { listarSaldosCalculados, listarMovimentosRecentes, buscarEstoqueVirtualComDerivados } from '../lib/estoqueMovimentosApi'
 import { listarTurnosAbertos, listarTurnosHistorico, turnoVencido } from '../lib/turnosApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../lib/requisicaoTransferenciaApi'
-import { buscarProdutosPorCodigosEverest } from '../lib/api'
+import { buscarProdutosPorCodigosEverest, listarUnidades } from '../lib/api'
 import { formatarNumero } from '../admin/lib/formato'
+
+const SEM_LOJA = '__sem_loja__'
 
 // Painel de acompanhamento (07/10/2026, pedido do Felipe: "um painel completo pra
 // acompanhamento... tira do abrir e fechar, cria um painel legal com informações" — veio depois
@@ -37,6 +40,7 @@ function faz(iso) {
 
 export default function TelaAcompanhamento({ onSair }) {
   const [locais, setLocais] = useState([])
+  const [unidades, setUnidades] = useState([])
   const [turnosAbertos, setTurnosAbertos] = useState([])
   const [ultimoFechadoPorLocal, setUltimoFechadoPorLocal] = useState({})
   const [saldosPorLocal, setSaldosPorLocal] = useState({})
@@ -53,9 +57,10 @@ export default function TelaAcompanhamento({ onSair }) {
 
     async function carregar() {
       try {
-        const ls = await listarLocaisEstoque()
+        const [ls, us] = await Promise.all([listarLocaisEstoque(), listarUnidades()])
         if (cancelado) return
         setLocais(ls)
+        setUnidades(us)
 
         const [abertos, saldosBrutos, pr, pt, mov] = await Promise.all([
           listarTurnosAbertos(),
@@ -181,6 +186,8 @@ export default function TelaAcompanhamento({ onSair }) {
         )}
       </div>
 
+      <EstoqueVirtualPorItem locais={locais} unidades={unidades} />
+
       {(pendentesReq.length > 0 || pendentesTransf.length > 0) && (
         <div className="card" style={{ marginBottom: 14 }}>
           <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Pendências</p>
@@ -224,6 +231,108 @@ export default function TelaAcompanhamento({ onSair }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// Mesma conta do Admin (Painel → "Estoque virtual por item"), só que SEM preço/valor de propósito
+// — preço de compra não é informação pra operação ver, só quantidade (pedido do Felipe, 09/10/2026).
+function EstoqueVirtualPorItem({ locais, unidades }) {
+  const [lojaId, setLojaId] = useState('')
+  const [setorId, setSetorId] = useState('')
+  const [produto, setProduto] = useState(null)
+  const [buscando, setBuscando] = useState(false)
+  const [erro, setErro] = useState('')
+  const [itens, setItens] = useState(null)
+
+  function locaisAlvo() {
+    if (setorId) return locais.filter((l) => l.id === setorId)
+    if (lojaId === SEM_LOJA) return locais.filter((l) => !l.unidade_id)
+    if (lojaId) return locais.filter((l) => l.unidade_id === lojaId)
+    return locais
+  }
+
+  async function buscar() {
+    if (!produto) return
+    setBuscando(true)
+    setErro('')
+    try {
+      setItens(await buscarEstoqueVirtualComDerivados({ codigoEverestRaiz: produto.codigo_everest, locaisAlvo: locaisAlvo() }))
+    } catch (e) {
+      setErro('Não consegui buscar — ' + e.message)
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  const raiz = itens?.[0]
+  const derivados = itens?.slice(1) || []
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Estoque virtual por item</p>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>Escolha um item e veja a quantidade calculada dele e dos derivados, filtrado por Loja e/ou Setor.</p>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ flex: 1, minWidth: 140 }}>
+          <label className="muted">Loja</label>
+          <select value={lojaId} onChange={(e) => { setLojaId(e.target.value); setSetorId('') }}>
+            <option value="">Todas</option>
+            {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+            <option value={SEM_LOJA}>Sem loja</option>
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 140 }}>
+          <label className="muted">Setor</label>
+          <select value={setorId} onChange={(e) => setSetorId(e.target.value)}>
+            <option value="">Todos</option>
+            {locaisAlvo().map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {!produto ? (
+        <BuscaProdutoPerda onSelecionar={setProduto} />
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <p style={{ margin: 0, fontWeight: 500 }}>{produto.nome}</p>
+          <button type="button" className="ghost" onClick={() => { setProduto(null); setItens(null) }}>trocar</button>
+        </div>
+      )}
+
+      {produto && (
+        <button className="primary" onClick={buscar} disabled={buscando} style={{ marginBottom: 14 }}>
+          {buscando ? 'Buscando…' : 'Ver estoque virtual'}
+        </button>
+      )}
+
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 10 }}>{erro}</p>}
+
+      {raiz && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-3)', borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
+            <div>
+              <p style={{ margin: 0, fontWeight: 500 }}>{raiz.nome}</p>
+              <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>Everest {raiz.codigo_everest} · raiz da cadeia</p>
+            </div>
+            <p style={{ margin: 0, fontWeight: 600, fontSize: 20 }}>{formatarNumero(raiz.saldo, 3)}</p>
+          </div>
+
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 13 }}>Derivados</p>
+          {derivados.length === 0 ? (
+            <p className="muted">Esse item não tem nenhum derivado cadastrado.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {derivados.map((d) => (
+                <div key={d.codigo_everest} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', border: '0.5px solid var(--border)', borderRadius: 8 }}>
+                  <span style={{ fontSize: 13 }}>{d.nome}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{formatarNumero(d.saldo, 3)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

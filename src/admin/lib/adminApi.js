@@ -6587,6 +6587,37 @@ async function buscarCustoMedioAtual(codigoEverest) {
   return melhor ? melhor.preco : null
 }
 
+// Mesmo princípio de `buscarCustoMedioAtual`, só que pra vários códigos de uma vez (evita 1
+// consulta por item numa tela de lista) — pedido do Felipe (09/10/2026): mostrar o preço junto do
+// estoque virtual por item no Admin. Devolve um mapa { codigo_everest: preco | undefined }.
+export async function buscarCustoMedioAtualPorCodigos(codigos) {
+  if (!codigos?.length) return {}
+  const { data: itens, error } = await supabase
+    .from('notas_importadas_itens')
+    .select('codigo_everest, nota_id, valor_unitario, calcula_cmv')
+    .in('codigo_everest', codigos)
+  if (error) throw error
+  const validos = (itens || []).filter((i) => i.calcula_cmv !== false && i.valor_unitario != null)
+  if (!validos.length) return {}
+  const idsNotas = [...new Set(validos.map((i) => i.nota_id))]
+  const notas = []
+  for (let i = 0; i < idsNotas.length; i += 300) {
+    const lote = idsNotas.slice(i, i + 300)
+    const { data, error: erroNotas } = await supabase.from('notas_importadas').select('id, data_emissao').in('id', lote)
+    if (erroNotas) throw erroNotas
+    notas.push(...(data || []))
+  }
+  const dataPorNota = new Map(notas.map((n) => [n.id, n.data_emissao]))
+  const melhorPorCodigo = {}
+  for (const item of validos) {
+    const data = dataPorNota.get(item.nota_id)
+    if (!data) continue
+    const atual = melhorPorCodigo[item.codigo_everest]
+    if (!atual || data > atual.data) melhorPorCodigo[item.codigo_everest] = { data, preco: Number(item.valor_unitario) }
+  }
+  return Object.fromEntries(Object.entries(melhorPorCodigo).map(([codigo, v]) => [codigo, v.preco]))
+}
+
 // Retorna a árvore completa de usos a partir de 1 código Everest (o insumo/PP escolhido no admin).
 // `null` se o código nem existe no cadastro atual de Produtos.
 export async function buscarArvoreDeUsos(codigoEverestRaiz) {

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from '../../components/BuscaProdutoPerda'
 import { listarLocaisEstoque } from '../../lib/locaisEstoqueApi'
-import { listarUnidades, buscarProdutosPorCodigosEverest } from '../../lib/api'
-import { listarSaldosCalculados } from '../../lib/estoqueMovimentosApi'
-import { buscarFatoresCorrecao, buscarDescendentes } from '../../lib/fatoresCorrecaoApi'
-import { formatarNumero } from '../lib/formato'
+import { listarUnidades } from '../../lib/api'
+import { buscarEstoqueVirtualComDerivados } from '../../lib/estoqueMovimentosApi'
+import { buscarCustoMedioAtualPorCodigos } from '../lib/adminApi'
+import { formatarNumero, formatarMoeda } from '../lib/formato'
 
 const SEM_LOJA = '__sem_loja__'
 
@@ -12,6 +12,10 @@ const SEM_LOJA = '__sem_loja__'
 // porcionamento), filtrável por Loja, Setor e Item — pra validar se o saldo calculado bate com o
 // que tem de verdade na praça. Reaproveita o mesmo ledger de "Saldo calculado por setor"
 // (LocaisEstoque.jsx), só muda o recorte: aqui é por ITEM (+ descendentes), lá é por Setor.
+//
+// Versão Admin mostra preço e valor (preço × saldo) — o Painel de Controle operacional (mesma
+// conta, `TelaAcompanhamento.jsx`) mostra só quantidade de propósito, preço/custo não é
+// informação pra operação ver.
 export default function EstoqueVirtualItem() {
   const [locais, setLocais] = useState([])
   const [unidades, setUnidades] = useState([])
@@ -44,28 +48,15 @@ export default function EstoqueVirtualItem() {
     setBuscando(true)
     setErro('')
     try {
-      const alvo = locaisAlvo()
-      const [mapa, saldosPorLocal] = await Promise.all([
-        buscarFatoresCorrecao(),
-        Promise.all(alvo.map((l) => listarSaldosCalculados(l.id)))
-      ])
-
-      const saldoPorCodigo = {}
-      saldosPorLocal.forEach((linhas) => {
-        linhas.forEach((l) => { saldoPorCodigo[l.codigo_everest] = (saldoPorCodigo[l.codigo_everest] || 0) + Number(l.saldo) })
+      const base = await buscarEstoqueVirtualComDerivados({
+        codigoEverestRaiz: produto.codigo_everest,
+        locaisAlvo: locaisAlvo()
       })
-
-      const descendentes = buscarDescendentes(mapa, produto.codigo_everest)
-      const todosCodigos = [produto.codigo_everest, ...descendentes]
-      const produtos = await buscarProdutosPorCodigosEverest(todosCodigos)
-      const nomePorCodigo = Object.fromEntries(produtos.map((p) => [p.codigo_everest, p.nome]))
-
-      setItens(todosCodigos.map((codigo, i) => ({
-        codigo_everest: codigo,
-        nome: nomePorCodigo[codigo] || codigo,
-        raiz: i === 0,
-        saldo: saldoPorCodigo[codigo] || 0
-      })))
+      const precoPorCodigo = await buscarCustoMedioAtualPorCodigos(base.map((i) => i.codigo_everest))
+      setItens(base.map((i) => {
+        const preco = precoPorCodigo[i.codigo_everest]
+        return { ...i, preco: preco ?? null, valor: preco != null ? preco * i.saldo : null }
+      }))
     } catch (e) {
       setErro('Não consegui buscar — ' + e.message)
     } finally {
@@ -83,6 +74,7 @@ export default function EstoqueVirtualItem() {
       <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Estoque virtual por item</p>
       <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>
         Escolha um item e veja o saldo calculado dele e de todos os derivados (árvore de porcionamento), filtrado por Loja e/ou Setor.
+        Preço é o último valor de compra conhecido (nota importada) — "—" quando nunca comprado com esse código.
       </p>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -125,11 +117,15 @@ export default function EstoqueVirtualItem() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-3)', borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
             <div>
               <p style={{ margin: 0, fontWeight: 500 }}>{raiz.nome}</p>
-              <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>Everest {raiz.codigo_everest} · raiz da cadeia</p>
+              <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
+                Everest {raiz.codigo_everest} · raiz da cadeia · {raiz.preco != null ? `${formatarMoeda(raiz.preco)}/un.` : 'sem preço de compra'}
+              </p>
             </div>
             <div style={{ textAlign: 'right' }}>
               <p style={{ margin: 0, fontWeight: 600, fontSize: 20 }}>{formatarNumero(raiz.saldo, 3)}</p>
-              <p className="muted" style={{ margin: 0, fontSize: 12 }}>estoque virtual</p>
+              <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                estoque virtual{raiz.valor != null ? ` · ${formatarMoeda(raiz.valor)}` : ''}
+              </p>
             </div>
           </div>
 
@@ -137,14 +133,25 @@ export default function EstoqueVirtualItem() {
           {derivados.length === 0 ? (
             <p className="muted">Esse item não tem nenhum derivado cadastrado em Árvore de Porcionamento.</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {derivados.map((d) => (
-                <div key={d.codigo_everest} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', border: '0.5px solid var(--border)', borderRadius: 8 }}>
-                  <span style={{ fontSize: 13 }}>{d.nome}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{formatarNumero(d.saldo, 3)}</span>
-                </div>
-              ))}
-            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
+                  {['Item', 'Saldo', 'Preço', 'Valor'].map((h) => (
+                    <th key={h} style={{ textAlign: h === 'Item' ? 'left' : 'right', padding: '6px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {derivados.map((d) => (
+                  <tr key={d.codigo_everest} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                    <td style={{ padding: '8px' }}>{d.nome}</td>
+                    <td style={{ padding: '8px', textAlign: 'right', fontWeight: 600 }}>{formatarNumero(d.saldo, 3)}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }} className="muted">{d.preco != null ? formatarMoeda(d.preco) : '—'}</td>
+                    <td style={{ padding: '8px', textAlign: 'right' }}>{d.valor != null ? formatarMoeda(d.valor) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </>
       )}
