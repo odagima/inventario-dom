@@ -39,6 +39,12 @@ import {
 // pra continuar porcionando. Cada etapa continua sendo seu próprio registro de produção por baixo
 // (`producao_origem_id` encadeia uma na outra, ver migration_v15.sql) — só a TELA que parou de
 // forçar navegação a cada passo.
+//
+// 09/10/2026 (pedido do Felipe, "menos burocrático... muita informação, confuso no tablet"): duas
+// mudanças em cima disso — (1) cada etapa recolhe o formulário de "o que saiu" assim que tem pelo
+// menos 1 item pesado (ver `formAberto` em `Etapa`), só reabre se a pessoa pedir; (2) sumiu o
+// "Finalizar essa etapa" de cada card — virou um "Finalizar tudo" só, em `FormProcesso`, que grava
+// o movimento de TODAS as etapas em andamento da cadeia de uma vez.
 
 const CAT_INSUMO = CATEGORIAS_PERDA.find((c) => c.valor === 'materia_prima')
 const CAT_PP = CATEGORIAS_PERDA.find((c) => c.valor === 'pre_preparo')
@@ -441,6 +447,8 @@ function FormProcesso({ raizId, usuario, onErro }) {
   const [cadeia, setCadeia] = useState([])
   const [mapaFatores, setMapaFatores] = useState(null)
   const [carregando, setCarregando] = useState(true)
+  const [confirmandoFinalizarTudo, setConfirmandoFinalizarTudo] = useState(false)
+  const [finalizandoTudo, setFinalizandoTudo] = useState(false)
 
   const recarregar = useCallback(async () => {
     try {
@@ -469,6 +477,34 @@ function FormProcesso({ raizId, usuario, onErro }) {
     }
   }
 
+  // 09/10/2026 (pedido do Felipe): um "Finalizar" só pra cadeia inteira, não um por etapa — grava
+  // o movimento de TODAS as etapas em andamento de uma vez. Uma etapa aberta sem nenhum item
+  // pesado ainda bloqueia o botão (precisa decidir: adiciona algo ou cancela essa etapa primeiro),
+  // pra não finalizar silenciosamente uma etapa vazia.
+  async function finalizarTudo() {
+    setFinalizandoTudo(true)
+    try {
+      for (const etapa of etapasComSaida) {
+        await finalizarProducao(etapa.id, usuario)
+        if (etapa.local_estoque_id) {
+          const itensEtapa = etapa.producoes_itens || []
+          for (const e of itensEtapa.filter((i) => i.papel === 'entrada')) {
+            await registrarMovimento({ localEstoqueId: etapa.local_estoque_id, codigoEverest: e.codigo_everest, quantidade: -Number(e.quantidade), tipo: 'producao_entrada', producaoId: etapa.id, usuario })
+          }
+          for (const s of itensEtapa.filter((i) => i.papel === 'saida')) {
+            await registrarMovimento({ localEstoqueId: etapa.local_estoque_id, codigoEverest: s.codigo_everest, quantidade: Number(s.quantidade), tipo: 'producao_saida', producaoId: etapa.id, usuario })
+          }
+        }
+      }
+      setConfirmandoFinalizarTudo(false)
+      await recarregar()
+    } catch (e) {
+      onErro('Não consegui finalizar — ' + e.message)
+    } finally {
+      setFinalizandoTudo(false)
+    }
+  }
+
   if (carregando) return <p className="muted">Carregando…</p>
 
   const raiz = cadeia.find((p) => !p.producao_origem_id)
@@ -479,6 +515,11 @@ function FormProcesso({ raizId, usuario, onErro }) {
   const nomeRaiz = raiz.producoes_itens?.find((i) => i.papel === 'entrada')?.produtos?.nome
     || raiz.producoes_itens?.find((i) => i.papel === 'entrada')?.codigo_everest
     || '—'
+
+  const etapasAbertas = cadeia.filter((p) => p.status === 'em_andamento')
+  const etapasComSaida = etapasAbertas.filter((p) => (p.producoes_itens || []).some((i) => i.papel === 'saida'))
+  const etapasVazias = etapasAbertas.filter((p) => !(p.producoes_itens || []).some((i) => i.papel === 'saida'))
+  const podeFinalizarTudo = etapasComSaida.length > 0 && etapasVazias.length === 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -495,18 +536,74 @@ function FormProcesso({ raizId, usuario, onErro }) {
       {demaisEtapas.map((p) => (
         <Etapa key={p.id} producao={p} usuario={usuario} mapaFatores={mapaFatores} onMudou={recarregar} onNovaEtapa={(item) => criarSubEtapa(p, item)} onErro={onErro} />
       ))}
+
+      {etapasAbertas.length > 0 && (
+        <>
+          <button
+            className="primary"
+            onClick={() => setConfirmandoFinalizarTudo(true)}
+            disabled={!podeFinalizarTudo}
+            style={{ width: '100%', padding: 14 }}
+          >
+            Finalizar tudo
+          </button>
+          {etapasVazias.length > 0 && (
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Tem etapa sem nenhum item pesado ainda — adicione algo nela ou cancele ela antes de finalizar tudo.
+            </p>
+          )}
+        </>
+      )}
+
+      {confirmandoFinalizarTudo && (
+        <Modal onFechar={() => !finalizandoTudo && setConfirmandoFinalizarTudo(false)} largura={380}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ margin: 0, fontWeight: 600 }}>Confere antes de fechar — isso grava no saldo do local de estoque de {etapasComSaida.length} {etapasComSaida.length === 1 ? 'etapa' : 'etapas'}</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 280, overflowY: 'auto' }}>
+              {etapasComSaida.map((etapa) => {
+                const entradaEtapa = (etapa.producoes_itens || []).find((i) => i.papel === 'entrada')
+                const saidasEtapa = (etapa.producoes_itens || []).filter((i) => i.papel === 'saida')
+                return (
+                  <div key={etapa.id}>
+                    <p className="muted" style={{ margin: '0 0 4px', fontSize: 11.5 }}>
+                      A partir de {entradaEtapa ? `${fmt(entradaEtapa.quantidade)} ${entradaEtapa.unidade} de ${entradaEtapa.produtos?.nome || entradaEtapa.codigo_everest}` : '—'}
+                    </p>
+                    {saidasEtapa.map((s) => (
+                      <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, paddingLeft: 10 }}>
+                        <span style={{ minWidth: 0 }}>{s.produtos?.nome || s.codigo_everest}</span>
+                        <span style={{ fontWeight: 600, flexShrink: 0 }}>{fmt(s.quantidade)} {s.unidade}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button onClick={() => setConfirmandoFinalizarTudo(false)} disabled={finalizandoTudo} style={{ flex: 1 }}>Revisar</button>
+              <button className="primary" onClick={finalizarTudo} disabled={finalizandoTudo} style={{ flex: 1 }}>
+                {finalizandoTudo ? 'Finalizando…' : 'Confirmar e finalizar tudo'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
 
 // ── Etapa: um registro de produção dentro da cadeia — o que entrou nela, o que saiu, e o botão
 // pra continuar processando qualquer um dos itens que saíram.
+//
+// 09/10/2026 (pedido do Felipe, "menos burocrático... muita informação, confuso no tablet"): cada
+// etapa some de tela cheia assim que tem pelo menos 1 item pesado — vira um resumo compacto, com
+// um link "+ adicionar outro item aqui" pra reabrir o formulário só se precisar. O "Finalizar"
+// deixou de existir por etapa — virou um botão só, "Finalizar tudo", lá em FormProcesso, que grava
+// o movimento de TODAS as etapas da cadeia de uma vez (ver finalizarTudo).
 function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro }) {
   const [categoria, setCategoria] = useState(CATEGORIAS[1]) // saída costuma ser pré-preparo
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
   const [salvando, setSalvando] = useState(false)
-  const [confirmandoFinalizar, setConfirmandoFinalizar] = useState(false)
   const [confirmandoCancelar, setConfirmandoCancelar] = useState(false)
   const [esperados, setEsperados] = useState({}) // codigo_everest -> F.C. teórico esperado
   const [produtosFamilia, setProdutosFamilia] = useState([]) // só o PRÓXIMO passo (filhos diretos da entrada)
@@ -517,6 +614,9 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
   const itens = producao.producoes_itens || []
   const entradas = itens.filter((i) => i.papel === 'entrada')
   const saidas = itens.filter((i) => i.papel === 'saida')
+  // Abre sozinho enquanto a etapa não tem nenhum item pesado ainda; depois do primeiro, recolhe —
+  // só reabre se a pessoa pedir ("+ adicionar outro item aqui").
+  const [formAberto, setFormAberto] = useState(saidas.length === 0)
   const r = rendimentoDoEvento(producao)
   const qtd = Number(String(quantidade).replace(',', '.'))
   const codigoEntrada = entradas[0]?.codigo_everest
@@ -560,6 +660,7 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
       })
       setProduto(null)
       setQuantidade('')
+      setFormAberto(false)
       await onMudou()
     } catch (e) {
       onErro('Não consegui salvar — ' + e.message)
@@ -578,29 +679,6 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
       await onMudou()
     } catch (e) {
       onErro('Não consegui editar — ' + e.message)
-    } finally {
-      setSalvando(false)
-    }
-  }
-
-  async function finalizarComMovimento() {
-    setSalvando(true)
-    try {
-      await finalizarProducao(producao.id, usuario)
-      // Saldo calculado do local de estoque: credita cada saída, debita cada entrada. Produção
-      // sem local (lançamentos antigos, ou alguém sem local escolhido) não mexe em saldo nenhum.
-      if (producao.local_estoque_id) {
-        for (const e of entradas) {
-          await registrarMovimento({ localEstoqueId: producao.local_estoque_id, codigoEverest: e.codigo_everest, quantidade: -Number(e.quantidade), tipo: 'producao_entrada', producaoId: producao.id, usuario })
-        }
-        for (const s of saidas) {
-          await registrarMovimento({ localEstoqueId: producao.local_estoque_id, codigoEverest: s.codigo_everest, quantidade: Number(s.quantidade), tipo: 'producao_saida', producaoId: producao.id, usuario })
-        }
-      }
-      setConfirmandoFinalizar(false)
-      await onMudou()
-    } catch (e) {
-      onErro(e.message)
     } finally {
       setSalvando(false)
     }
@@ -636,7 +714,7 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
         )
       })}
 
-      {!finalizada && (
+      {!finalizada && formAberto && (
         <>
           <p style={{ margin: 0, fontWeight: 600 }}>O que saiu?</p>
           {!produto ? (
@@ -772,21 +850,16 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
         </div>
       )}
 
-      {!finalizada && (
-        <>
-          <button
-            className="primary"
-            onClick={() => setConfirmandoFinalizar(true)}
-            disabled={salvando || saidas.length === 0}
-            style={{ width: '100%', padding: 14 }}
-          >
-            Finalizar essa etapa
-          </button>
+      {!finalizada && !formAberto && (
+        <button type="button" className="ghost" onClick={() => setFormAberto(true)} style={{ alignSelf: 'flex-start', fontSize: 13.5, padding: '10px 14px', fontWeight: 500 }}>
+          + Adicionar outro item aqui
+        </button>
+      )}
 
-          <button className="ghost" onClick={() => setConfirmandoCancelar(true)} style={{ color: 'var(--danger)' }}>
-            Cancelar essa etapa
-          </button>
-        </>
+      {!finalizada && (
+        <button className="ghost" onClick={() => setConfirmandoCancelar(true)} style={{ color: 'var(--danger)', alignSelf: 'flex-start' }}>
+          Cancelar essa etapa
+        </button>
       )}
 
       {confirmandoCancelar && (
@@ -798,28 +871,6 @@ function Etapa({ producao, usuario, mapaFatores, onMudou, onNovaEtapa, onErro })
               onClick={async () => { await cancelarProducao(producao.id, usuario); setConfirmandoCancelar(false); await onMudou() }}
               style={{ flex: 1, background: 'var(--danger)', color: '#fff' }}
             >Confirmar</button>
-          </div>
-        </Modal>
-      )}
-
-      {confirmandoFinalizar && (
-        <Modal onFechar={() => !salvando && setConfirmandoFinalizar(false)} largura={360}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <p style={{ margin: 0, fontWeight: 600 }}>Confere antes de fechar — isso grava no saldo do local de estoque</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {saidas.map((s) => (
-                <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>
-                  <span style={{ minWidth: 0 }}>{s.produtos?.nome || s.codigo_everest}</span>
-                  <span style={{ fontWeight: 600, flexShrink: 0 }}>{fmt(s.quantidade)} {s.unidade}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              <button onClick={() => setConfirmandoFinalizar(false)} disabled={salvando} style={{ flex: 1 }}>Revisar</button>
-              <button className="primary" onClick={finalizarComMovimento} disabled={salvando} style={{ flex: 1 }}>
-                {salvando ? 'Finalizando…' : 'Confirmar e finalizar'}
-              </button>
-            </div>
           </div>
         </Modal>
       )}
