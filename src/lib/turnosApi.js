@@ -1,5 +1,8 @@
 import { supabase } from './supabase'
 import { criarTransferenciaImediata } from './requisicaoTransferenciaApi'
+import { buscarTurnoAberto, turnoVencido } from './turnosLeitura'
+
+export { buscarTurnoAberto, listarTurnosAbertos, listarTurnosHistorico, turnoVencido, periodoDoTurno, LABEL_PERIODO, exigirPracaAbertaHoje } from './turnosLeitura'
 
 // Turno de operação por local de estoque (migration_v23.sql) — pedido do Felipe: "tipo caixa...
 // abre, opera, precisa fechar pra operar o próximo turno". Abrir = transferência de saída
@@ -20,58 +23,13 @@ import { criarTransferenciaImediata } from './requisicaoTransferenciaApi'
 // Requisição/Transferência — "aqui é um controle, não é um impeditivo da pessoa pegar. Se não ela
 // vai pegar e não vai anotar." Virou só rastreio/status (alimenta o Painel de Controle), não
 // bloqueia lançamento de ninguém. `turnoUtilizavel` (que fazia essa trava) foi removida.
-
-export async function buscarTurnoAberto(localEstoqueId) {
-  const { data, error } = await supabase
-    .from('turnos')
-    .select('*')
-    .eq('local_estoque_id', localEstoqueId)
-    .eq('status', 'aberto')
-    .order('aberto_em', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (error) throw error
-  return data
-}
-
-export async function listarTurnosAbertos() {
-  const { data, error } = await supabase
-    .from('turnos')
-    .select('*, local:local_estoque_id(id, nome)')
-    .eq('status', 'aberto')
-    .order('aberto_em', { ascending: true })
-  if (error) throw error
-  return data || []
-}
-
-export async function listarTurnosHistorico(localEstoqueId, limite = 100) {
-  let q = supabase.from('turnos').select('*').order('aberto_em', { ascending: false }).limit(limite)
-  if (localEstoqueId) q = q.eq('local_estoque_id', localEstoqueId)
-  const { data, error } = await q
-  if (error) throw error
-  return data || []
-}
-
-// Próxima virada das 3h depois de um horário — 3h da manhã funciona como "virada do dia" pro
-// turno, não meia-noite. Se abriu antes das 3h, a virada é hoje às 3h; se abriu depois, é amanhã.
-function proximaVirada(dataHora) {
-  const d = new Date(dataHora)
-  const virada = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 3, 0, 0, 0)
-  if (d >= virada) virada.setDate(virada.getDate() + 1)
-  return virada
-}
-
-export function turnoVencido(turno) {
-  if (!turno || turno.status !== 'aberto') return false
-  return new Date() >= proximaVirada(turno.aberto_em)
-}
-
-export function periodoDoTurno(abertoEm) {
-  const hora = new Date(abertoEm).getHours()
-  return (hora >= 10 && hora < 16) ? 'almoco' : 'jantar'
-}
-
-export const LABEL_PERIODO = { almoco: 'Almoço', jantar: 'Jantar' }
+//
+// 09/10/2026 (pedido do Felipe, revendo DE NOVO): volta a travar — ver `exigirPracaAbertaHoje` em
+// turnosLeitura.js, chamada de dentro de producaoApi.js/requisicaoTransferenciaApi.js/
+// recebimentosApi.js. Esse arquivo (turnosApi.js) ficou só com abrir/fechar a praça em si — o
+// resto (leitura + a trava nova) mora em turnosLeitura.js pra evitar import circular (este arquivo
+// já importa `criarTransferenciaImediata` de requisicaoTransferenciaApi.js; a trava precisa ser
+// chamada DE DENTRO desse mesmo arquivo, então não pode morar aqui).
 
 // `itens` = [{ codigoEverest, quantidade }] — tudo que está sendo levado pra praça de uma vez.
 export async function abrirTurno({ localEstoqueId, localOrigemId, itens, usuario }) {

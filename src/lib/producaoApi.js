@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { calcularFCTeorico } from './fatoresCorrecaoApi'
+import { exigirPracaAbertaHoje } from './turnosLeitura'
 
 // ── PRODUÇÃO (migration_v14.sql, com local de estoque desde migration_v15.sql) ───────────────
 // Registro da etapa de transformação: o que entrou, o que saiu, e quanto rendeu de verdade.
@@ -107,6 +108,9 @@ export async function listarProducoes({ status, dataInicio, dataFim, limite = 20
 export async function abrirProducao({ data, turno, usuario, entrada, observacao, localEstoqueId, producaoOrigemId }) {
   if (!entrada?.codigoEverest) throw new Error('Produção precisa de pelo menos um item de entrada.')
   if (!(Number(entrada.quantidade) > 0)) throw new Error('A quantidade de entrada precisa ser maior que zero.')
+  // Pedido do Felipe (09/10/2026): precisa estar com a operação do Setor aberta hoje pra começar
+  // uma etapa (vale pra planejada/direta/subproduto — todas passam por aqui).
+  await exigirPracaAbertaHoje(localEstoqueId)
 
   const { data: producao, error } = await supabase
     .from('producoes')

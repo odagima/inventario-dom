@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import Topbar from '../components/Topbar'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
-import { listarSaldosCalculados, listarMovimentosRecentes, buscarEstoqueVirtualComDerivados } from '../lib/estoqueMovimentosApi'
+import { listarSaldosCalculados, listarMovimentosRecentes, buscarEstoqueVirtualComDerivados, saldoFiltrado } from '../lib/estoqueMovimentosApi'
 import { listarTurnosAbertos, listarTurnosHistorico, turnoVencido } from '../lib/turnosApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../lib/requisicaoTransferenciaApi'
 import { buscarProdutosPorCodigosEverest, listarUnidades } from '../lib/api'
@@ -244,12 +244,20 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
   const [buscando, setBuscando] = useState(false)
   const [erro, setErro] = useState('')
   const [itens, setItens] = useState(null)
+  const [setoresComDado, setSetoresComDado] = useState(null)
 
-  function locaisAlvo() {
-    if (setorId) return locais.filter((l) => l.id === setorId)
+  // Setores da Loja escolhida (ignora o Setor já selecionado — senão escolher um Setor encolhe o
+  // próprio seletor pra só ele, bug reportado).
+  function locaisDaLoja() {
     if (lojaId === SEM_LOJA) return locais.filter((l) => !l.unidade_id)
     if (lojaId) return locais.filter((l) => l.unidade_id === lojaId)
     return locais
+  }
+
+  function opcoesSetor() {
+    const daLoja = locaisDaLoja()
+    if (!setoresComDado) return daLoja
+    return daLoja.filter((l) => setoresComDado.includes(l.id))
   }
 
   async function buscar() {
@@ -257,7 +265,14 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
     setBuscando(true)
     setErro('')
     try {
-      setItens(await buscarEstoqueVirtualComDerivados({ codigoEverestRaiz: produto.codigo_everest, locaisAlvo: locaisAlvo() }))
+      const { itens: base, locaisComSaldo } = await buscarEstoqueVirtualComDerivados({
+        codigoEverestRaiz: produto.codigo_everest,
+        locaisAlvo: locaisDaLoja()
+      })
+      setSetoresComDado(locaisComSaldo)
+      const setorEfetivo = locaisComSaldo.includes(setorId) ? setorId : ''
+      if (setorId && !locaisComSaldo.includes(setorId)) setSetorId('')
+      setItens(base.map((i) => ({ ...i, saldo: saldoFiltrado(i, setorEfetivo) })))
     } catch (e) {
       setErro('Não consegui buscar — ' + e.message)
     } finally {
@@ -267,6 +282,8 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
 
   const raiz = itens?.[0]
   const derivados = itens?.slice(1) || []
+  const derivadosComSaldo = derivados.filter((d) => Math.abs(d.saldo) > 0.0001)
+  const derivadosZerados = derivados.filter((d) => Math.abs(d.saldo) <= 0.0001)
 
   return (
     <div className="card" style={{ marginBottom: 14 }}>
@@ -286,7 +303,7 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
           <label className="muted">Setor</label>
           <select value={setorId} onChange={(e) => setSetorId(e.target.value)}>
             <option value="">Todos</option>
-            {locaisAlvo().map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+            {opcoesSetor().map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
           </select>
         </div>
       </div>
@@ -296,7 +313,7 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
       ) : (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <p style={{ margin: 0, fontWeight: 500 }}>{produto.nome}</p>
-          <button type="button" className="ghost" onClick={() => { setProduto(null); setItens(null) }}>trocar</button>
+          <button type="button" className="ghost" onClick={() => { setProduto(null); setItens(null); setSetoresComDado(null) }}>trocar</button>
         </div>
       )}
 
@@ -318,18 +335,37 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
             <p style={{ margin: 0, fontWeight: 600, fontSize: 20 }}>{formatarNumero(raiz.saldo, 3)}</p>
           </div>
 
-          <p className="muted" style={{ margin: '0 0 8px', fontSize: 13 }}>Derivados</p>
           {derivados.length === 0 ? (
             <p className="muted">Esse item não tem nenhum derivado cadastrado.</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {derivados.map((d) => (
-                <div key={d.codigo_everest} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', border: '0.5px solid var(--border)', borderRadius: 8 }}>
-                  <span style={{ fontSize: 13 }}>{d.nome}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{formatarNumero(d.saldo, 3)}</span>
+            <>
+              <p className="muted" style={{ margin: '0 0 8px', fontSize: 13 }}>Derivados com saldo ({derivadosComSaldo.length})</p>
+              {derivadosComSaldo.length === 0 ? (
+                <p className="muted" style={{ marginBottom: 14 }}>Nenhum derivado com saldo nesse recorte.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+                  {derivadosComSaldo.map((d) => (
+                    <div key={d.codigo_everest} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', border: '0.5px solid var(--border)', borderRadius: 8 }}>
+                      <span style={{ fontSize: 13 }}>{d.nome}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{formatarNumero(d.saldo, 3)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+              {derivadosZerados.length > 0 && (
+                <details>
+                  <summary className="muted" style={{ fontSize: 13, cursor: 'pointer', marginBottom: 8 }}>Zerados ({derivadosZerados.length})</summary>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {derivadosZerados.map((d) => (
+                      <div key={d.codigo_everest} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', border: '0.5px solid var(--border)', borderRadius: 8 }}>
+                        <span style={{ fontSize: 13 }}>{d.nome}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>{formatarNumero(d.saldo, 3)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
           )}
         </>
       )}

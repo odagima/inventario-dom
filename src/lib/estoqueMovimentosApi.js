@@ -76,39 +76,62 @@ export async function listarMovimentosRecentes(limite = 30) {
   return data || []
 }
 
-// Histórico de movimentação de UM item — pedido do Felipe (06/10/2026): "ter um histórico da
-// movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
-// (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra
-// a partir de uma data só corta o que é MOSTRADO depois, em `LocaisEstoque.jsx`.
 // Saldo virtual de um item JUNTO com todos os derivados dele (árvore de porcionamento, ver
-// `buscarDescendentes` em fatoresCorrecaoApi.js) — somado só nos `locaisAlvo` informados (quem
-// chama decide o recorte: todos os setores, só os de uma Loja, ou um Setor só). Usado tanto no
-// Admin (que soma preço depois) quanto no Painel de Controle operacional (só quantidade) — pra não
-// duplicar essa conta em dois lugares e um dia desalinhar.
+// `buscarDescendentes` em fatoresCorrecaoApi.js) — calculado por Setor (`porLocal`) dentro dos
+// `locaisAlvo` informados (quem chama decide o recorte mais amplo: todos os setores, ou só os de
+// uma Loja) — quem usa decide depois se soma tudo ou mostra só 1 Setor, sem precisar buscar de
+// novo (pedido do Felipe, 09/10/2026: filtro de Setor só deve oferecer Setor com dado, e separar
+// o que tem saldo do que está zerado — os dois precisam do detalhe por Setor, não só o total).
+// Usado tanto no Admin (que soma preço depois) quanto no Painel de Controle operacional (só
+// quantidade) — pra não duplicar essa conta em dois lugares e um dia desalinhar.
 export async function buscarEstoqueVirtualComDerivados({ codigoEverestRaiz, locaisAlvo }) {
   const [mapa, saldosPorLocal] = await Promise.all([
     buscarFatoresCorrecao(),
     Promise.all(locaisAlvo.map((l) => listarSaldosCalculados(l.id)))
   ])
 
-  const saldoPorCodigo = {}
-  saldosPorLocal.forEach((linhas) => {
-    linhas.forEach((l) => { saldoPorCodigo[l.codigo_everest] = (saldoPorCodigo[l.codigo_everest] || 0) + Number(l.saldo) })
-  })
-
   const descendentes = buscarDescendentes(mapa, codigoEverestRaiz)
   const todosCodigos = [codigoEverestRaiz, ...descendentes]
+  const todosCodigosSet = new Set(todosCodigos)
+
+  const porLocalPorCodigo = {} // { codigo: { localId: saldo } }
+  todosCodigos.forEach((c) => { porLocalPorCodigo[c] = {} })
+  const locaisComSaldo = []
+  locaisAlvo.forEach((l, i) => {
+    let somaLocal = 0
+    ;(saldosPorLocal[i] || []).forEach((linha) => {
+      if (!todosCodigosSet.has(linha.codigo_everest)) return
+      const saldo = Number(linha.saldo)
+      porLocalPorCodigo[linha.codigo_everest][l.id] = saldo
+      somaLocal += saldo
+    })
+    if (Math.abs(somaLocal) > 0.0001) locaisComSaldo.push(l.id)
+  })
+
   const produtos = await buscarProdutosPorCodigosEverest(todosCodigos)
   const nomePorCodigo = Object.fromEntries(produtos.map((p) => [p.codigo_everest, p.nome]))
 
-  return todosCodigos.map((codigo, i) => ({
+  const itens = todosCodigos.map((codigo, i) => ({
     codigo_everest: codigo,
     nome: nomePorCodigo[codigo] || codigo,
     raiz: i === 0,
-    saldo: saldoPorCodigo[codigo] || 0
+    porLocal: porLocalPorCodigo[codigo]
   }))
+
+  return { itens, locaisComSaldo }
 }
 
+// Soma `item.porLocal` restrito a um Setor (ou a todos, se `setorId` vier vazio) — usado pelas
+// telas depois de `buscarEstoqueVirtualComDerivados` pra exibir o número já filtrado.
+export function saldoFiltrado(item, setorId) {
+  if (setorId) return item.porLocal[setorId] || 0
+  return Object.values(item.porLocal).reduce((a, v) => a + v, 0)
+}
+
+// Histórico de movimentação de UM item — pedido do Felipe (06/10/2026): "ter um histórico da
+// movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
+// (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra
+// a partir de uma data só corta o que é MOSTRADO depois, em `LocaisEstoque.jsx`.
 export async function buscarHistoricoMovimentos({ codigoEverest, localEstoqueId, dataFim }) {
   let q = supabase
     .from('estoque_movimentos')

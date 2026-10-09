@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from './BuscaProdutoPerda'
 import TrocarLocalModal from './TrocarLocalModal'
 import ContextoLancamento from './ContextoLancamento'
+import Modal from './Modal'
 import Topbar from './Topbar'
 import { useRotulos } from '../lib/RotulosContext'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
@@ -34,6 +35,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
   const [verificando, setVerificando] = useState(false)
   const [salvando, setSalvando] = useState(false)
   const [erro, setErro] = useState('')
+  const [concluido, setConcluido] = useState(null)
 
   useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
 
@@ -58,7 +60,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
     setErro('')
     try {
       await criarRecebimento({ localEstoqueId, codigoEverest: produto.codigo_everest, quantidade: qtd, fornecedor, numeroNota, usuario })
-      onPronto()
+      setConcluido(`${produto.nome} · ${qtd} ${produto.unidade_medida}`)
     } catch (e) {
       setErro('Não consegui registrar — ' + e.message)
     } finally {
@@ -72,12 +74,23 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
     try {
       await excluirRecebimento(parecido.id)
       await criarRecebimento({ localEstoqueId, codigoEverest: produto.codigo_everest, quantidade: qtd, fornecedor, numeroNota, usuario })
-      onPronto()
+      setConcluido(`${produto.nome} · ${qtd} ${produto.unidade_medida}`)
     } catch (e) {
       setErro('Não consegui concluir — ' + e.message)
     } finally {
       setSalvando(false)
     }
+  }
+
+  // "Sim, registrar outro" mantém Setor + Fornecedor (é comum vir vários itens da mesma entrega) —
+  // só limpa o item/quantidade/NF, igual pedido do Felipe (09/10/2026) pro padrão de todos os
+  // lançamentos: confirma o sucesso, pergunta se quer continuar, só fecha/limpa depois da resposta.
+  function registrarOutro() {
+    setProduto(null)
+    setQuantidade('')
+    setNumeroNota('')
+    setParecido(null)
+    setConcluido(null)
   }
 
   const pronto = localEstoqueId && fornecedor.trim().length >= 2 && produto && qtd > 0
@@ -175,6 +188,20 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
           </button>
         )}
       </div>
+
+      {concluido && (
+        <Modal onFechar={onPronto} largura={340}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <p style={{ margin: 0, fontWeight: 600, fontSize: 16 }}>Recebimento registrado com sucesso!</p>
+            <p className="muted" style={{ margin: 0 }}>{concluido}</p>
+            <p style={{ margin: 0 }}>Quer registrar outro?</p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={onPronto} style={{ flex: 1 }}>Não, fechar</button>
+              <button className="primary" onClick={registrarOutro} style={{ flex: 1 }}>Sim, registrar outro</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

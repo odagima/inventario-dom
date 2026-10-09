@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { registrarMovimento } from './estoqueMovimentosApi'
 import { buscarConfiguracao } from './configuracoesApi'
+import { exigirPracaAbertaHoje } from './turnosLeitura'
 
 // Requisição × Transferência (migration_v15.sql), distinguidas pela origem (ver
 // PLANO-TRANSFORMACAO.md): se a origem é um estoque/cofre que precisa de liberação (Central,
@@ -46,6 +47,9 @@ export async function listarRequisicoesHistorico(limite = 200) {
 export async function criarRequisicao({ localSolicitanteId, localAtendenteId, codigoEverest, quantidadeSolicitada, usuario, observacao }) {
   if (localSolicitanteId === localAtendenteId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidadeSolicitada) > 0)) throw new Error('Informe uma quantidade maior que zero.')
+  // Pedido do Felipe (09/10/2026): quem atende é quem fisicamente tira o item da praça agora —
+  // precisa estar com a operação aberta hoje. Quem só está pedindo (solicitante) não precisa.
+  await exigirPracaAbertaHoje(localAtendenteId)
   const { data, error } = await supabase
     .from('requisicoes')
     .insert({
@@ -79,6 +83,9 @@ export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora,
   if (erroReq) throw erroReq
   const qtd = Number(quantidadeAtendidaAgora)
   if (!(qtd > 0)) throw new Error('Informe uma quantidade maior que zero.')
+  // Atendimento manual (requisicao_exige_aprovacao ligado) pode acontecer bem depois da criação,
+  // por outra pessoa — confere de novo se a praça de quem atende ainda está aberta hoje.
+  await exigirPracaAbertaHoje(req.local_atendente_id)
   const jaAtendido = Number(req.quantidade_atendida || 0)
   const totalAtendido = jaAtendido + qtd
   const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
@@ -132,6 +139,11 @@ export async function listarTransferenciasHistorico(limite = 200) {
 export async function criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario, turnoId }) {
   if (localOrigemId === localDestinoId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidade) > 0)) throw new Error('Informe uma quantidade maior que zero.')
+  // Pedido do Felipe (09/10/2026): quem manda é quem já tem o material em mãos agora — precisa
+  // estar com a operação aberta hoje. Só pula a trava quando `turnoId` já veio preenchido — sinal
+  // de que isso é a transferência INTERNA do fluxo Abrir/Fechar praça (turnosApi.js), que já tem
+  // sua própria trava de abrir/fechar e não pode depender de si mesma pra se destravar.
+  if (!turnoId) await exigirPracaAbertaHoje(localOrigemId)
   const { data: transferencia, error } = await supabase
     .from('transferencias')
     .insert({

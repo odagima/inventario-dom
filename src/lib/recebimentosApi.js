@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { registrarMovimento } from './estoqueMovimentosApi'
+import { exigirPracaAbertaHoje } from './turnosLeitura'
 
 // Recebimento de mercadoria (migration_v21.sql) — pedido do Felipe (06/10/2026): lançamento rápido
 // de "chegou material", antes da nota fiscal ser processada no Admin (que pode levar dias). Credita
@@ -24,6 +25,9 @@ export async function buscarRecebimentoParecido({ fornecedor, quantidade, codigo
 }
 
 export async function criarRecebimento({ localEstoqueId, codigoEverest, quantidade, fornecedor, numeroNota, usuario }) {
+  // Pedido do Felipe (09/10/2026): precisa estar com a operação do Setor aberta hoje pra registrar
+  // recebimento (antes não tinha nenhuma trava de praça aqui).
+  await exigirPracaAbertaHoje(localEstoqueId)
   const { data, error } = await supabase
     .from('recebimentos')
     .insert({
