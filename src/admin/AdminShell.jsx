@@ -30,6 +30,7 @@ import Equipamentos from './pages/Equipamentos'
 import Cobertura from './pages/Cobertura'
 import Backup from './pages/Backup'
 import Painel from './pages/Painel'
+import EstoqueVirtualItem from './pages/EstoqueVirtualItem'
 import LocaisEstoque from './pages/LocaisEstoque'
 import LimpezaTeste from './pages/LimpezaTeste'
 import ConfiguracoesSistema from './pages/ConfiguracoesSistema'
@@ -80,7 +81,8 @@ const MODULOS = [
     titulo: 'Painel',
     abas: [
       { id: 'painel_resumo', label: 'Resumo' },
-      { id: 'painel_analiseCusto', label: 'Análise de custo', perm: 'custos.ver' }
+      { id: 'painel_analiseCusto', label: 'Análise de custo', perm: 'custos.ver' },
+      { id: 'painel_estoqueVirtual', label: 'Estoque virtual por item', perm: 'custos.ver' }
     ]
   },
   {
@@ -277,6 +279,7 @@ export default function AdminShell({ nivelAcesso, usuario = null, onSair }) {
           {/* ── PAINEL ── */}
           {aba === 'painel_resumo' && <Painel />}
           {aba === 'painel_analiseCusto' && <AnaliseCusto />}
+          {aba === 'painel_estoqueVirtual' && <EstoqueVirtualItem />}
 
           {/* ── INVENTÁRIO ── */}
           {aba === 'inv_analise' && <Dashboard tipoFiltro="mensal" />}

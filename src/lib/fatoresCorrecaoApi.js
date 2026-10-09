@@ -77,3 +77,32 @@ export function brutoEquivalente(mapa, codigoEverest, quantidade) {
 export function filhosDiretos(mapa, codigoPai) {
   return Object.keys(mapa).filter((filho) => mapa[filho].pai === codigoPai)
 }
+
+// Pedido do Felipe (09/10/2026): ver o estoque virtual de um item JUNTO com todos os derivados
+// dele (não só o próximo passo) — ex. escolher "Filet Mignon Peça" e já ver Escalope, Medalhão,
+// Fumeiro etc., não importa quantos níveis de porcionamento existam até lá. `filhosDiretos` só
+// anda um degrau; aqui desce a árvore inteira, nível a nível, com guarda de ciclo (não devia
+// existir ciclo num `fatores_correcao` válido, mas um cadastro errado não pode travar a tela) e um
+// teto de profundidade por segurança.
+const PROFUNDIDADE_MAXIMA_DESCENDENTES = 12
+
+export function buscarDescendentes(mapa, codigoRaiz) {
+  const vistos = new Set([codigoRaiz])
+  const ordem = []
+  let nivelAtual = [codigoRaiz]
+  let profundidade = 0
+  while (nivelAtual.length > 0 && profundidade < PROFUNDIDADE_MAXIMA_DESCENDENTES) {
+    const proximoNivel = []
+    for (const codigoPai of nivelAtual) {
+      for (const filho of filhosDiretos(mapa, codigoPai)) {
+        if (vistos.has(filho)) continue // guarda de ciclo
+        vistos.add(filho)
+        ordem.push(filho)
+        proximoNivel.push(filho)
+      }
+    }
+    nivelAtual = proximoNivel
+    profundidade += 1
+  }
+  return ordem
+}
