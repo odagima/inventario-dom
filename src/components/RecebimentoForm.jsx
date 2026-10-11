@@ -8,6 +8,7 @@ import Topbar from './Topbar'
 import { useRotulos } from '../lib/RotulosContext'
 import { CATEGORIAS_PERDA } from '../lib/perdas'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
+import { listarUnidades } from '../lib/api'
 import { buscarRecebimentoParecido, criarRecebimento, excluirRecebimento } from '../lib/recebimentosApi'
 
 const CAT_INSUMO = CATEGORIAS_PERDA.find((c) => c.valor === 'materia_prima')
@@ -23,6 +24,7 @@ function agora() {
 export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onErro, onSair }) {
   const rotulos = useRotulos()
   const [locais, setLocais] = useState([])
+  const [unidades, setUnidades] = useState([])
   // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): quem tem Setor
   // padrão vinculado já entra com o local certo — ainda dá pra trocar no select, é escolha de uma
   // vez só (não um cabeçalho de sessão, como Perdas).
@@ -39,6 +41,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
   const [concluido, setConcluido] = useState(null)
 
   useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
+  useEffect(() => { listarUnidades().then(setUnidades).catch(() => {}) }, [])
 
   const qtd = Number(String(quantidade).replace(',', '.'))
 
@@ -97,6 +100,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
   const pronto = localEstoqueId && fornecedor.trim().length >= 2 && produto && qtd > 0
 
   const localAtual = locais.find((l) => l.id === localEstoqueId)
+  const lojaAtual = localAtual && unidades.find((u) => u.id === localAtual.unidade_id)
 
   // Ícone de lixeira no cabeçalho (08/10/2026, "quero todos com isso" — mesma cara de Perdas e
   // Contagem): aqui não existe sessão salva pra excluir de verdade, só limpa o que a pessoa ainda
@@ -120,6 +124,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <ContextoLancamento
+          loja={lojaAtual?.nome || null}
           setor={localAtual?.nome || `sem ${rotulos.setor.toLowerCase()}`}
           data={agora()}
           usuario={usuario}
