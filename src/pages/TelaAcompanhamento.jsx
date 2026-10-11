@@ -357,11 +357,14 @@ function StatusDaOperacao({ usuario, locais, unidades }) {
     if (!localId) { setCarregando(false); return }
     let cancelado = false
     setCarregando(true)
-    Promise.all([buscarTurnoAberto(localId), listarTurnosHistorico(localId, 1)])
+    // `listarTurnosHistorico` não filtra status — se a praça está aberta agora, a linha mais
+    // recente é a ABERTA (mesmo registro), não um fechamento de verdade. Busca algumas linhas e
+    // acha a primeira já FECHADA, pra nunca confundir "abriu" com "fechou".
+    Promise.all([buscarTurnoAberto(localId), listarTurnosHistorico(localId, 5)])
       .then(([t, hist]) => {
         if (cancelado) return
         setTurno(t)
-        setUltimoFechado(hist[0] || null)
+        setUltimoFechado(hist.find((h) => h.status === 'fechado') || null)
         setErro('')
       })
       .catch((e) => { if (!cancelado) setErro('Não consegui carregar — ' + e.message) })
