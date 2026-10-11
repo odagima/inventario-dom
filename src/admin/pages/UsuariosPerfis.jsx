@@ -462,9 +462,9 @@ function PainelPessoa({ usuario, perfis, unidades, locais, semMigracao, onFechar
   const [nome, setNome] = useState(usuario.nome_completo || '')
   const [perfilId, setPerfilId] = useState(usuario.perfil_id || '')
   const [unidadeId, setUnidadeId] = useState(usuario.unidade_id || '')
-  // `usuario.local_estoque_padrao_id` só vem preenchido quando `listar_usuarios_seguro` devolver
-  // esse campo (ainda não confirmado — ver migration_v24.sql). Até lá o campo sempre abre vazio
-  // aqui, mas SALVAR já funciona direto na tabela (ver `atualizarLocalPadraoUsuario`).
+  // `usuario.local_estoque_padrao_id` vem de `listar_usuarios_seguro` (corrigida na
+  // migration_v28.sql — antes não devolvia esse campo, então o editor sempre abria vazio mesmo com
+  // um valor já salvo).
   const [localEstoquePadraoId, setLocalEstoquePadraoId] = useState(usuario.local_estoque_padrao_id || '')
   const [pin, setPin] = useState('')
   const [ativo, setAtivo] = useState(usuario.ativo !== false)
