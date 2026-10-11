@@ -9,6 +9,7 @@ import {
   removerRequisicaoCompleta,
   removerTransferenciaCompleta
 } from '../../lib/requisicaoTransferenciaApi'
+import { listarTurnosHistorico, removerTurnoCompleto } from '../../lib/turnosApi'
 
 // Limpeza de teste — só DEV (pedido do Felipe, 06/10/2026: "estou fazendo vários testes, e depois
 // preciso apagar"). Diferente do "×" no Histórico de movimentação (LocaisEstoque.jsx, que só
@@ -24,23 +25,26 @@ export default function LimpezaTeste() {
   const [producoes, setProducoes] = useState([])
   const [requisicoes, setRequisicoes] = useState([])
   const [transferencias, setTransferencias] = useState([])
+  const [turnos, setTurnos] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
-  const [pendente, setPendente] = useState(null) // { tipo: 'producao'|'requisicao'|'transferencia', id, rotulo }
+  const [pendente, setPendente] = useState(null) // { tipo: 'producao'|'requisicao'|'transferencia'|'turno', id, rotulo }
   const [excluindo, setExcluindo] = useState(false)
 
   async function carregar() {
     try {
-      const [ls, prod, req, transf] = await Promise.all([
+      const [ls, prod, req, transf, trn] = await Promise.all([
         listarLocaisEstoque(),
         listarProducoes({ limite: 100 }),
         listarRequisicoesHistorico(100),
-        listarTransferenciasHistorico(100)
+        listarTransferenciasHistorico(100),
+        listarTurnosHistorico(null, 100)
       ])
       setLocais(ls)
       setProducoes(prod)
       setRequisicoes(req)
       setTransferencias(transf)
+      setTurnos(trn)
       setErro('')
     } catch (e) {
       setErro('Não consegui carregar — ' + e.message)
@@ -59,6 +63,7 @@ export default function LimpezaTeste() {
       if (pendente.tipo === 'producao') await removerProducaoCompleta(pendente.id)
       if (pendente.tipo === 'requisicao') await removerRequisicaoCompleta(pendente.id)
       if (pendente.tipo === 'transferencia') await removerTransferenciaCompleta(pendente.id)
+      if (pendente.tipo === 'turno') await removerTurnoCompleto(pendente.id)
       setPendente(null)
       await carregar()
       return true
@@ -79,7 +84,7 @@ export default function LimpezaTeste() {
       <div className="card">
         <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Limpeza de teste</p>
         <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
-          Exclui o evento inteiro (não só o reflexo no saldo) — produção, requisição ou transferência, com tudo que está ligado a ele. Não dá pra desfazer.
+          Exclui o evento inteiro (não só o reflexo no saldo) — produção, requisição, transferência ou abertura/fechamento de praça, com tudo que está ligado a ele. Não dá pra desfazer.
         </p>
       </div>
 
@@ -123,6 +128,28 @@ export default function LimpezaTeste() {
                 </span>
                 <button
                   onClick={() => setPendente({ tipo: 'requisicao', id: r.id, rotulo: `requisição de ${r.codigo_everest}` })}
+                  style={{ padding: '6px 9px', color: 'var(--danger)', flexShrink: 0 }}
+                >Excluir</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Abertura/fechamento de praça (turnos)</p>
+        {turnos.length === 0 ? <p className="muted">Nenhum ainda.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {turnos.map((t) => (
+              <div key={t.id} className="list-item">
+                <span>
+                  {nomePorLocal[t.local_estoque_id] || 'sem local'}
+                  {' '}· aberto {new Date(t.aberto_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  {t.aberto_por ? ` por ${t.aberto_por}` : ''}
+                  {' '}<span className="muted">({t.status}{t.fechado_por ? `, fechado por ${t.fechado_por}` : ''})</span>
+                </span>
+                <button
+                  onClick={() => setPendente({ tipo: 'turno', id: t.id, rotulo: `turno de ${nomePorLocal[t.local_estoque_id] || 'sem local'}` })}
                   style={{ padding: '6px 9px', color: 'var(--danger)', flexShrink: 0 }}
                 >Excluir</button>
               </div>

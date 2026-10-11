@@ -80,3 +80,15 @@ export async function fecharTurno({ turnoId, localDestinoId, itens, usuario }) {
     .eq('id', turnoId)
   if (error) throw error
 }
+
+// Exclusão COMPLETA — só DEV, ver LimpezaTeste.jsx (mesmo motivo de `removerProducaoCompleta`/
+// `removerTransferenciaCompleta`: "estou fazendo vários testes, e depois preciso apagar", pedido do
+// Felipe 06/10/2026). Os movimentos de abrir/fechar já viram `estoque_movimentos` com
+// `transferencia_id` preenchido (via `criarTransferenciaImediata`) — excluir a transferência pela
+// tela de Transferências já limpa esses. Aqui só apaga o turno em si, mais qualquer movimento
+// solto que por algum motivo tenha `turno_id` sem `transferencia_id` (defensivo).
+export async function removerTurnoCompleto(turnoId) {
+  await supabase.from('estoque_movimentos').delete().eq('turno_id', turnoId).is('transferencia_id', null)
+  const { error } = await supabase.from('turnos').delete().eq('id', turnoId)
+  if (error) throw error
+}
