@@ -10,6 +10,11 @@
 
 alter table usuarios_app add column if not exists local_estoque_padrao_id uuid references locais_estoque(id);
 
+-- Postgres não deixa `create or replace function` mudar as colunas de retorno de uma function que
+-- já existe (erro 42P13, "cannot change return type of existing function") — como essa versão
+-- ganha 2 colunas novas no retorno, precisa derrubar a antiga antes de recriar.
+drop function if exists verificar_pin_seguro(text);
+
 create or replace function verificar_pin_seguro(pin_informado text)
 returns table(
   nome_completo text, nivel_acesso text,
