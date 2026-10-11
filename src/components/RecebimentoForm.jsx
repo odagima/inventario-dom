@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from './BuscaProdutoPerda'
+import BuscaFornecedor from './BuscaFornecedor'
 import TrocarLocalModal from './TrocarLocalModal'
 import ContextoLancamento from './ContextoLancamento'
 import Modal from './Modal'
@@ -136,7 +137,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
         <div>
           <label className="muted">Fornecedor</label>
-          <input type="text" value={fornecedor} onChange={(e) => setFornecedor(e.target.value)} placeholder="Nome do fornecedor" />
+          <BuscaFornecedor value={fornecedor} onChange={setFornecedor} />
         </div>
 
         <div>

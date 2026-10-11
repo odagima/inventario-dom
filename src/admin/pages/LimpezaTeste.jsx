@@ -10,6 +10,7 @@ import {
   removerTransferenciaCompleta
 } from '../../lib/requisicaoTransferenciaApi'
 import { listarTurnosHistorico, removerTurnoCompleto } from '../../lib/turnosApi'
+import { listarRecebimentosHistorico, excluirRecebimento } from '../../lib/recebimentosApi'
 
 // Limpeza de teste — só DEV (pedido do Felipe, 06/10/2026: "estou fazendo vários testes, e depois
 // preciso apagar"). Diferente do "×" no Histórico de movimentação (LocaisEstoque.jsx, que só
@@ -26,25 +27,28 @@ export default function LimpezaTeste() {
   const [requisicoes, setRequisicoes] = useState([])
   const [transferencias, setTransferencias] = useState([])
   const [turnos, setTurnos] = useState([])
+  const [recebimentos, setRecebimentos] = useState([])
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
-  const [pendente, setPendente] = useState(null) // { tipo: 'producao'|'requisicao'|'transferencia'|'turno', id, rotulo }
+  const [pendente, setPendente] = useState(null) // { tipo: 'producao'|'requisicao'|'transferencia'|'turno'|'recebimento', id, rotulo }
   const [excluindo, setExcluindo] = useState(false)
 
   async function carregar() {
     try {
-      const [ls, prod, req, transf, trn] = await Promise.all([
+      const [ls, prod, req, transf, trn, receb] = await Promise.all([
         listarLocaisEstoque(),
         listarProducoes({ limite: 100 }),
         listarRequisicoesHistorico(100),
         listarTransferenciasHistorico(100),
-        listarTurnosHistorico(null, 100)
+        listarTurnosHistorico(null, 100),
+        listarRecebimentosHistorico(100)
       ])
       setLocais(ls)
       setProducoes(prod)
       setRequisicoes(req)
       setTransferencias(transf)
       setTurnos(trn)
+      setRecebimentos(receb)
       setErro('')
     } catch (e) {
       setErro('Não consegui carregar — ' + e.message)
@@ -64,6 +68,7 @@ export default function LimpezaTeste() {
       if (pendente.tipo === 'requisicao') await removerRequisicaoCompleta(pendente.id)
       if (pendente.tipo === 'transferencia') await removerTransferenciaCompleta(pendente.id)
       if (pendente.tipo === 'turno') await removerTurnoCompleto(pendente.id)
+      if (pendente.tipo === 'recebimento') await excluirRecebimento(pendente.id)
       setPendente(null)
       await carregar()
       return true
@@ -84,7 +89,7 @@ export default function LimpezaTeste() {
       <div className="card">
         <p style={{ margin: 0, fontWeight: 600, fontSize: 15 }}>Limpeza de teste</p>
         <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
-          Exclui o evento inteiro (não só o reflexo no saldo) — produção, requisição, transferência ou abertura/fechamento de praça, com tudo que está ligado a ele. Não dá pra desfazer.
+          Exclui o evento inteiro (não só o reflexo no saldo) — produção, requisição, transferência, abertura/fechamento de praça ou recebimento, com tudo que está ligado a ele. Não dá pra desfazer.
         </p>
       </div>
 
@@ -150,6 +155,26 @@ export default function LimpezaTeste() {
                 </span>
                 <button
                   onClick={() => setPendente({ tipo: 'turno', id: t.id, rotulo: `turno de ${nomePorLocal[t.local_estoque_id] || 'sem local'}` })}
+                  style={{ padding: '6px 9px', color: 'var(--danger)', flexShrink: 0 }}
+                >Excluir</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 15 }}>Recebimentos</p>
+        {recebimentos.length === 0 ? <p className="muted">Nenhum ainda.</p> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {recebimentos.map((r) => (
+              <div key={r.id} className="list-item">
+                <span>
+                  {nomePorLocal[r.local_estoque_id] || 'sem local'} · {r.fornecedor} · {r.quantidade} {r.codigo_everest}
+                  {r.numero_nota ? ` · NF ${r.numero_nota}` : ''}
+                </span>
+                <button
+                  onClick={() => setPendente({ tipo: 'recebimento', id: r.id, rotulo: `recebimento de ${r.fornecedor}` })}
                   style={{ padding: '6px 9px', color: 'var(--danger)', flexShrink: 0 }}
                 >Excluir</button>
               </div>

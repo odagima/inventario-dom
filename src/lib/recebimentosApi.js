@@ -24,6 +24,18 @@ export async function buscarRecebimentoParecido({ fornecedor, quantidade, codigo
   return data
 }
 
+// Usado pela Limpeza de teste (Admin), 11/10/2026 — faltava listar recebimento pra apagar, as
+// outras 3 (produção/requisição/transferência) já tinham.
+export async function listarRecebimentosHistorico(limite = 200) {
+  const { data, error } = await supabase
+    .from('recebimentos')
+    .select('*')
+    .order('registrado_em', { ascending: false })
+    .limit(limite)
+  if (error) throw error
+  return data || []
+}
+
 export async function criarRecebimento({ localEstoqueId, codigoEverest, quantidade, fornecedor, numeroNota, usuario }) {
   // Pedido do Felipe (09/10/2026): precisa estar com a operação do Setor aberta hoje pra registrar
   // recebimento (antes não tinha nenhuma trava de praça aqui).
