@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
-import { calcularFCTeorico } from './fatoresCorrecaoApi'
+import { calcularFCTeorico, buscarFatoresCorrecao } from './fatoresCorrecaoApi'
 import { exigirPracaAbertaHoje } from './turnosLeitura'
+import { buscarProdutosPorCodigosEverest } from './api'
 
 // ── PRODUÇÃO (migration_v14.sql, com local de estoque desde migration_v15.sql) ───────────────
 // Registro da etapa de transformação: o que entrou, o que saiu, e quanto rendeu de verdade.
@@ -281,4 +282,52 @@ export async function mediaFCTeoricoHistorico(codigoEverest, mapaFatores) {
   })
   if (!valores.length) return 1
   return valores.reduce((a, b) => a + b, 0) / valores.length
+}
+
+// Produção da semana por item, dentro dos `locaisAlvo` (Painel de Controle, 11/10/2026, pedido
+// do Felipe: "produção da semana por setor... pode usar o mesmo filtro do estoque virtual"). Soma
+// a quantidade produzida (saída) e conta quantas ordens concluídas geraram aquele item, e tira a
+// média do F.C. TEÓRICO de cada ocorrência (mesmo cálculo mostrado por item dentro da própria
+// Ordem de Produção, `calcularFCTeorico`) — nunca a razão saída/entrada da etapa inteira, que
+// mistura todos os itens de saída dela.
+export async function buscarProducaoSemana({ locaisAlvo, dataInicio, dataFim }) {
+  const idsAlvo = new Set((locaisAlvo || []).map((l) => l.id))
+  const [producoes, mapaFatores] = await Promise.all([
+    listarProducoes({ status: 'concluida', dataInicio, dataFim, limite: 1000 }),
+    buscarFatoresCorrecao()
+  ])
+  const daSemana = producoes.filter((p) => idsAlvo.has(p.local_estoque_id))
+
+  const porCodigo = {} // { codigo: { quantidade, producaoIds: Set, fcs: [] } }
+  daSemana.forEach((p) => {
+    const itens = p.producoes_itens || []
+    const entradaTotal = itens.filter((i) => i.papel === 'entrada').reduce((a, i) => a + Number(i.quantidade || 0), 0)
+    itens.filter((i) => i.papel === 'saida').forEach((i) => {
+      const codigo = i.codigo_everest
+      if (!porCodigo[codigo]) porCodigo[codigo] = { quantidade: 0, producaoIds: new Set(), fcs: [] }
+      porCodigo[codigo].quantidade += Number(i.quantidade || 0)
+      porCodigo[codigo].producaoIds.add(p.id)
+      if (entradaTotal > 0) {
+        const fc = calcularFCTeorico(mapaFatores, codigo, Number(i.quantidade), entradaTotal)
+        if (fc != null) porCodigo[codigo].fcs.push(fc)
+      }
+    })
+  })
+
+  const codigos = Object.keys(porCodigo)
+  const produtos = await buscarProdutosPorCodigosEverest(codigos)
+  const nomePorCodigo = Object.fromEntries(produtos.map((p) => [p.codigo_everest, p.nome]))
+
+  return codigos
+    .map((codigo) => {
+      const linha = porCodigo[codigo]
+      return {
+        codigo_everest: codigo,
+        nome: nomePorCodigo[codigo] || codigo,
+        quantidade: linha.quantidade,
+        numProducoes: linha.producaoIds.size,
+        fcMedio: linha.fcs.length ? linha.fcs.reduce((a, b) => a + b, 0) / linha.fcs.length : null
+      }
+    })
+    .sort((a, b) => b.quantidade - a.quantidade)
 }

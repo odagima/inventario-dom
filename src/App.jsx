@@ -89,7 +89,7 @@ export default function App() {
         // na transição).
         : modo === 'admin' ? <AdminShell nivelAcesso={usuarioAtual?.nivelAcesso} usuario={usuarioAtual} onSair={voltarPraHome} />
         : modo === 'produtividade' ? <ProdutividadeShell usuarioLogado={usuarioAtual} onVoltar={voltarPraHome} />
-        : modo === 'acompanhamento' ? <TelaAcompanhamento onSair={voltarPraHome} />
+        : modo === 'acompanhamento' ? <TelaAcompanhamento usuarioLogado={usuarioAtual} onSair={voltarPraHome} />
         : (
           <HomeScreen
             usuarioLogado={usuarioAtual}

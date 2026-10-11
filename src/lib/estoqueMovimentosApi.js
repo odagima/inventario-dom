@@ -128,6 +128,32 @@ export function saldoFiltrado(item, setorId) {
   return Object.values(item.porLocal).reduce((a, v) => a + v, 0)
 }
 
+// Visão geral do estoque virtual — TODOS os itens com saldo calculado nos `locaisAlvo`, sem
+// precisar escolher um item raiz primeiro (Painel de Controle, 11/10/2026, pedido do Felipe:
+// alternativa em tabela única à busca por item, pra ver tudo que tem saldo — e o que zerou — de
+// uma vez). Cada local só entra na soma por item quando tem a MESMA linha (`listarSaldosCalculados`
+// já é por local), por isso soma local a local em vez de reusar `buscarEstoqueVirtualComDerivados`
+// (que restringe à árvore de um item raiz).
+export async function buscarSaldoVirtualGeral({ locaisAlvo }) {
+  const saldosPorLocal = await Promise.all(locaisAlvo.map((l) => listarSaldosCalculados(l.id)))
+
+  const porCodigo = {} // { codigo: { localId: saldo } }
+  locaisAlvo.forEach((l, i) => {
+    (saldosPorLocal[i] || []).forEach((linha) => {
+      if (!porCodigo[linha.codigo_everest]) porCodigo[linha.codigo_everest] = {}
+      porCodigo[linha.codigo_everest][l.id] = Number(linha.saldo)
+    })
+  })
+
+  const codigos = Object.keys(porCodigo)
+  const produtos = await buscarProdutosPorCodigosEverest(codigos)
+  const nomePorCodigo = Object.fromEntries(produtos.map((p) => [p.codigo_everest, p.nome]))
+
+  return codigos
+    .map((codigo) => ({ codigo_everest: codigo, nome: nomePorCodigo[codigo] || codigo, porLocal: porCodigo[codigo] }))
+    .sort((a, b) => a.nome.localeCompare(b.nome))
+}
+
 // Histórico de movimentação de UM item — pedido do Felipe (06/10/2026): "ter um histórico da
 // movimentação do item, sem ficar a lista corrida". Busca SEM filtro de data inicial de propósito
 // (só até `dataFim`) — o saldo acumulado precisa somar desde o início pra não mentir; quem filtra

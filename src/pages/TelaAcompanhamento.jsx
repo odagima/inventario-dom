@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import Topbar from '../components/Topbar'
 import BuscaProdutoPerda from '../components/BuscaProdutoPerda'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
-import { listarSaldosCalculados, listarMovimentosRecentes, buscarEstoqueVirtualComDerivados, saldoFiltrado } from '../lib/estoqueMovimentosApi'
-import { listarTurnosAbertos, listarTurnosHistorico, turnoVencido } from '../lib/turnosApi'
+import { listarSaldosCalculados, listarMovimentosRecentes, buscarEstoqueVirtualComDerivados, buscarSaldoVirtualGeral, saldoFiltrado } from '../lib/estoqueMovimentosApi'
+import { listarTurnosHistorico, turnoVencido, buscarTurnoAberto } from '../lib/turnosApi'
+import { buscarProducaoSemana } from '../lib/producaoApi'
 import { listarRequisicoesPendentes, listarTransferenciasPendentes } from '../lib/requisicaoTransferenciaApi'
 import { buscarProdutosPorCodigosEverest, listarUnidades } from '../lib/api'
 import { formatarNumero } from '../admin/lib/formato'
@@ -38,11 +39,9 @@ function faz(iso) {
   return `há ${Math.floor(h / 24)} dias`
 }
 
-export default function TelaAcompanhamento({ onSair }) {
+export default function TelaAcompanhamento({ usuarioLogado, onSair }) {
   const [locais, setLocais] = useState([])
   const [unidades, setUnidades] = useState([])
-  const [turnosAbertos, setTurnosAbertos] = useState([])
-  const [ultimoFechadoPorLocal, setUltimoFechadoPorLocal] = useState({})
   const [saldosPorLocal, setSaldosPorLocal] = useState({})
   const [pendentesReq, setPendentesReq] = useState([])
   const [pendentesTransf, setPendentesTransf] = useState([])
@@ -62,8 +61,7 @@ export default function TelaAcompanhamento({ onSair }) {
         setLocais(ls)
         setUnidades(us)
 
-        const [abertos, saldosBrutos, pr, pt, mov] = await Promise.all([
-          listarTurnosAbertos(),
+        const [saldosBrutos, pr, pt, mov] = await Promise.all([
           Promise.all(ls.map((l) => listarSaldosCalculados(l.id).then((linhas) => [l.id, linhas]))),
           listarRequisicoesPendentes(),
           listarTransferenciasPendentes(),
@@ -71,18 +69,9 @@ export default function TelaAcompanhamento({ onSair }) {
         ])
         if (cancelado) return
 
-        setTurnosAbertos(abertos)
         setPendentesReq(pr)
         setPendentesTransf(pt)
         setRecentes(mov)
-
-        const idsComAberto = new Set(abertos.map((t) => t.local_estoque_id))
-        const semAberto = ls.filter((l) => !idsComAberto.has(l.id))
-        const historicos = await Promise.all(semAberto.map((l) => listarTurnosHistorico(l.id, 1)))
-        if (cancelado) return
-        const mapaFechado = {}
-        semAberto.forEach((l, i) => { mapaFechado[l.id] = historicos[i][0] || null })
-        setUltimoFechadoPorLocal(mapaFechado)
 
         const mapaSaldo = {}
         saldosBrutos.forEach(([localId, linhas]) => {
@@ -113,7 +102,6 @@ export default function TelaAcompanhamento({ onSair }) {
   }, [])
 
   const nomePorLocal = Object.fromEntries(locais.map((l) => [l.id, l.nome]))
-  const abertoPorLocal = Object.fromEntries(turnosAbertos.map((t) => [t.local_estoque_id, t]))
 
   if (carregando) return (
     <div className="screen">
@@ -132,30 +120,7 @@ export default function TelaAcompanhamento({ onSair }) {
 
       {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{erro}</p>}
 
-      <div className="card" style={{ marginBottom: 14 }}>
-        <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Status das praças</p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {locais.map((l) => {
-            const turno = abertoPorLocal[l.id]
-            const vencido = turno && turnoVencido(turno)
-            const ultimoFechado = ultimoFechadoPorLocal[l.id]
-            return (
-              <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontWeight: 500 }}>{l.nome}</span>
-                {turno ? (
-                  <span style={{ fontSize: 12.5, textAlign: 'right', color: vencido ? 'var(--danger)' : 'var(--success)' }}>
-                    {vencido ? 'Vencida' : 'Aberta'} {faz(turno.aberto_em)}{turno.aberto_por ? ` · ${turno.aberto_por}` : ''}
-                  </span>
-                ) : ultimoFechado ? (
-                  <span className="muted" style={{ fontSize: 12.5, textAlign: 'right' }}>Fechada · {faz(ultimoFechado.fechado_em || ultimoFechado.aberto_em)}</span>
-                ) : (
-                  <span className="muted" style={{ fontSize: 12.5, textAlign: 'right' }}>Nunca aberta</span>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
+      <StatusDaOperacao usuario={usuarioLogado} locais={locais} unidades={unidades} />
 
       <div className="card" style={{ marginBottom: 14 }}>
         <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Saldo atual por praça</p>
@@ -185,6 +150,10 @@ export default function TelaAcompanhamento({ onSair }) {
           <p className="muted">Nenhum local com saldo lançado ainda.</p>
         )}
       </div>
+
+      <ProducaoDaSemana usuario={usuarioLogado} locais={locais} unidades={unidades} />
+
+      <EstoqueVirtualGeral locais={locais} unidades={unidades} />
 
       <EstoqueVirtualPorItem locais={locais} unidades={unidades} />
 
@@ -366,6 +335,266 @@ function EstoqueVirtualPorItem({ locais, unidades }) {
                 </details>
               )}
             </>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// Status da operação (11/10/2026, pedido do Felipe: substitui a lista "Status das praças" de
+// todo mundo — aqui só pega a referência da Loja/Setor DO PRÓPRIO USUÁRIO, igual o resto do app
+// já faz com `usuarioLogado.localPadraoId`). Mostra o turno aberto agora (se tiver) e o último
+// fechamento registrado, sempre os dois juntos — não só um ou outro.
+function StatusDaOperacao({ usuario, locais, unidades }) {
+  const localId = usuario?.localPadraoId || null
+  const [turno, setTurno] = useState(null)
+  const [ultimoFechado, setUltimoFechado] = useState(null)
+  const [carregando, setCarregando] = useState(true)
+  const [erro, setErro] = useState('')
+
+  useEffect(() => {
+    if (!localId) { setCarregando(false); return }
+    let cancelado = false
+    setCarregando(true)
+    Promise.all([buscarTurnoAberto(localId), listarTurnosHistorico(localId, 1)])
+      .then(([t, hist]) => {
+        if (cancelado) return
+        setTurno(t)
+        setUltimoFechado(hist[0] || null)
+        setErro('')
+      })
+      .catch((e) => { if (!cancelado) setErro('Não consegui carregar — ' + e.message) })
+      .finally(() => { if (!cancelado) setCarregando(false) })
+    return () => { cancelado = true }
+  }, [localId])
+
+  const local = locais.find((l) => l.id === localId)
+  const loja = local && unidades.find((u) => u.id === local.unidade_id)
+  const vencido = turno && turnoVencido(turno)
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Status da operação</p>
+      {!localId ? (
+        <p className="muted">Seu usuário não tem Setor padrão vinculado — vincule em Cadastros pra ver o status da sua praça aqui.</p>
+      ) : carregando ? (
+        <p className="muted">Carregando…</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontWeight: 500 }}>{loja ? `${loja.nome} · ` : ''}{local?.nome || usuario.localPadraoNome}</span>
+            {turno ? (
+              <span style={{ fontSize: 12.5, color: vencido ? 'var(--danger)' : 'var(--success)' }}>
+                {vencido ? 'Vencida' : 'Aberta'} {faz(turno.aberto_em)}{turno.aberto_por ? ` · ${turno.aberto_por}` : ''}
+              </span>
+            ) : (
+              <span className="muted" style={{ fontSize: 12.5 }}>Fechada</span>
+            )}
+          </div>
+          {ultimoFechado && (
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Último fechamento: {faz(ultimoFechado.fechado_em || ultimoFechado.aberto_em)}{ultimoFechado.fechado_por ? ` · ${ultimoFechado.fechado_por}` : ''}
+            </p>
+          )}
+        </div>
+      )}
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginTop: 8 }}>{erro}</p>}
+    </div>
+  )
+}
+
+// Produção da semana por Setor (11/10/2026, pedido do Felipe: "pode usar o mesmo filtro do
+// estoque virtual... sempre mostrar o status do usuário pegando loja e setor") — mesmo seletor de
+// Loja/Setor de `EstoqueVirtualPorItem`, mas já parte pré-preenchido com a Loja/Setor do próprio
+// usuário (continua trocável). Busca automática ao trocar o filtro — não tem item pra escolher
+// antes, diferente do estoque virtual.
+function ProducaoDaSemana({ usuario, locais, unidades }) {
+  const localPadrao = locais.find((l) => l.id === usuario?.localPadraoId)
+  const [lojaId, setLojaId] = useState(localPadrao?.unidade_id || '')
+  const [setorId, setSetorId] = useState(usuario?.localPadraoId || '')
+  const [itens, setItens] = useState(null)
+  const [carregando, setCarregando] = useState(false)
+  const [erro, setErro] = useState('')
+
+  function locaisDaLoja() {
+    if (lojaId === SEM_LOJA) return locais.filter((l) => !l.unidade_id)
+    if (lojaId) return locais.filter((l) => l.unidade_id === lojaId)
+    return locais
+  }
+
+  useEffect(() => {
+    if (!locais.length) return
+    let cancelado = false
+    setCarregando(true)
+    setErro('')
+    const alvo = setorId ? locais.filter((l) => l.id === setorId) : locaisDaLoja()
+    const hoje = new Date()
+    const seteDiasAtras = new Date(hoje.getTime() - 6 * 86400000)
+    const fmt = (d) => d.toISOString().slice(0, 10)
+    buscarProducaoSemana({ locaisAlvo: alvo, dataInicio: fmt(seteDiasAtras), dataFim: fmt(hoje) })
+      .then((linhas) => { if (!cancelado) setItens(linhas) })
+      .catch((e) => { if (!cancelado) setErro('Não consegui buscar — ' + e.message) })
+      .finally(() => { if (!cancelado) setCarregando(false) })
+    return () => { cancelado = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lojaId, setorId, locais.length])
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Produção da semana</p>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>Últimos 7 dias, por Setor. F.C. médio é o teórico (ver Produção), não a razão saída/entrada da etapa.</p>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ flex: 1, minWidth: 140 }}>
+          <label className="muted">Loja</label>
+          <select value={lojaId} onChange={(e) => { setLojaId(e.target.value); setSetorId('') }}>
+            <option value="">Todas</option>
+            {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+            <option value={SEM_LOJA}>Sem loja</option>
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 140 }}>
+          <label className="muted">Setor</label>
+          <select value={setorId} onChange={(e) => setSetorId(e.target.value)}>
+            <option value="">Todos</option>
+            {locaisDaLoja().map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 10 }}>{erro}</p>}
+
+      {carregando ? (
+        <p className="muted">Buscando…</p>
+      ) : !itens || itens.length === 0 ? (
+        <p className="muted">Nenhuma produção concluída nos últimos 7 dias nesse recorte.</p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
+              {['Item', 'Qtd. semana', 'Produções', 'F.C. médio'].map((h) => (
+                <th key={h} style={{ textAlign: h === 'Item' ? 'left' : 'right', padding: '6px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {itens.map((i) => (
+              <tr key={i.codigo_everest} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                <td style={{ padding: '6px 8px' }}>{i.nome}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{formatarNumero(i.quantidade, 3)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{i.numProducoes}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: i.fcMedio == null ? 'var(--text-secondary)' : (i.fcMedio < 0.9 || i.fcMedio > 1.1) ? 'var(--danger)' : 'var(--success)' }}>
+                  {i.fcMedio != null ? `${(i.fcMedio * 100).toFixed(1)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// Estoque virtual — visão geral (11/10/2026, alternativa em tabela única à busca por item de
+// `EstoqueVirtualPorItem`, pedido do Felipe depois de ver o mockup denso: "gostei de tudo" — vê
+// TODOS os itens com saldo calculado no recorte de uma vez, com saldo/zerado já separado, sem
+// escolher uma raiz primeiro). As duas formas convivem — essa é rápida pra conferência geral, a
+// outra é pra investigar a árvore de um item específico.
+function EstoqueVirtualGeral({ locais, unidades }) {
+  const [lojaId, setLojaId] = useState('')
+  const [setorId, setSetorId] = useState('')
+  const [busca, setBusca] = useState('')
+  const [itens, setItens] = useState(null)
+  const [carregando, setCarregando] = useState(false)
+  const [erro, setErro] = useState('')
+
+  function locaisDaLoja() {
+    if (lojaId === SEM_LOJA) return locais.filter((l) => !l.unidade_id)
+    if (lojaId) return locais.filter((l) => l.unidade_id === lojaId)
+    return locais
+  }
+
+  useEffect(() => {
+    if (!locais.length) return
+    let cancelado = false
+    setCarregando(true)
+    setErro('')
+    const alvo = setorId ? locais.filter((l) => l.id === setorId) : locaisDaLoja()
+    buscarSaldoVirtualGeral({ locaisAlvo: alvo })
+      .then((base) => { if (!cancelado) setItens(base.map((i) => ({ ...i, saldo: saldoFiltrado(i, setorId) }))) })
+      .catch((e) => { if (!cancelado) setErro('Não consegui buscar — ' + e.message) })
+      .finally(() => { if (!cancelado) setCarregando(false) })
+    return () => { cancelado = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lojaId, setorId, locais.length])
+
+  const filtrados = (itens || []).filter((i) => !busca || i.nome.toLowerCase().includes(busca.toLowerCase()))
+  const comSaldo = filtrados.filter((i) => Math.abs(i.saldo) > 0.0001)
+  const zerados = filtrados.filter((i) => Math.abs(i.saldo) <= 0.0001)
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 15 }}>Estoque virtual — visão geral</p>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: 12 }}>Tudo que tem saldo calculado (e o que zerou) de uma vez, sem escolher um item primeiro.</p>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <label className="muted">Loja</label>
+          <select value={lojaId} onChange={(e) => { setLojaId(e.target.value); setSetorId('') }}>
+            <option value="">Todas</option>
+            {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+            <option value={SEM_LOJA}>Sem loja</option>
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <label className="muted">Setor</label>
+          <select value={setorId} onChange={(e) => setSetorId(e.target.value)}>
+            <option value="">Todos</option>
+            {locaisDaLoja().map((l) => <option key={l.id} value={l.id}>{l.nome}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <label className="muted">Buscar item</label>
+          <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Filtrar…" />
+        </div>
+      </div>
+
+      {erro && <p style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 10 }}>{erro}</p>}
+
+      {carregando ? (
+        <p className="muted">Buscando…</p>
+      ) : itens && (
+        <>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 13 }}>Com saldo ({comSaldo.length})</p>
+          {comSaldo.length === 0 ? (
+            <p className="muted" style={{ marginBottom: 14 }}>Nenhum item com saldo nesse recorte.</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 14 }}>
+              <tbody>
+                {comSaldo.map((i) => (
+                  <tr key={i.codigo_everest} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px 6px 0' }}>{i.nome}</td>
+                    <td style={{ padding: '6px 0', textAlign: 'right', fontWeight: 600 }}>{formatarNumero(i.saldo, 3)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {zerados.length > 0 && (
+            <details>
+              <summary className="muted" style={{ fontSize: 13, cursor: 'pointer', marginBottom: 8 }}>Zerados ({zerados.length})</summary>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <tbody>
+                  {zerados.map((i) => (
+                    <tr key={i.codigo_everest} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                      <td style={{ padding: '6px 8px 6px 0' }} className="muted">{i.nome}</td>
+                      <td style={{ padding: '6px 0', textAlign: 'right' }} className="muted">{formatarNumero(i.saldo, 3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
           )}
         </>
       )}
