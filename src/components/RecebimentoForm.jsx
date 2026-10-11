@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from './BuscaProdutoPerda'
 import BuscaFornecedor from './BuscaFornecedor'
-import TrocarLocalModal from './TrocarLocalModal'
+import TrocarLocalRecebimentoModal from './TrocarLocalRecebimentoModal'
 import ContextoLancamento from './ContextoLancamento'
 import Modal from './Modal'
 import Topbar from './Topbar'
@@ -132,11 +132,12 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
         />
 
         {trocandoSetor && (
-          <TrocarLocalModal
-            mostrarLoja={false}
+          <TrocarLocalRecebimentoModal
+            unidades={unidades}
+            locais={locais}
             localAtualId={localEstoqueId}
             onFechar={() => setTrocandoSetor(false)}
-            onConfirmar={(_, localNovo) => { setLocalEstoqueId(localNovo?.id || ''); setTrocandoSetor(false) }}
+            onConfirmar={(localNovo) => { setLocalEstoqueId(localNovo?.id || ''); setTrocandoSetor(false) }}
           />
         )}
 
