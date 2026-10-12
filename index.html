@@ -8,7 +8,11 @@
          navegador?"): manifest + meta tags fazem o navegador oferecer "Adicionar à tela inicial" —
          quando aberto a partir desse atalho, o app abre SEM a barra de endereço, do jeito que ele
          pediu. Abrir pelo link/aba normal continua mostrando a barra do navegador — isso é do
-         navegador, não tem como tirar de outro jeito; só funciona a partir do atalho instalado. -->
+         navegador, não tem como tirar de outro jeito; só funciona a partir do atalho instalado.
+         12/10/2026, testando num tablet: `display` do manifest virou "fullscreen" (era "standalone")
+         — no Android/Chrome isso tira também a barra de status do sistema (hora, bateria etc.), não
+         só a barra de endereço; no iPad/Safari não existe diferença (Safari não suporta o modo
+         "fullscreen" de PWA, só "standalone" — cai automaticamente nele, sem quebrar nada). -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon.svg" />
