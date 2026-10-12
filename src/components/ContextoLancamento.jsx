@@ -27,11 +27,14 @@ import { useRotulos } from '../lib/RotulosContext'
 // `onTrocarData`) abrem um popup simples de um passo só, sem confirmação extra.
 export default function ContextoLancamento({
   loja, setor, origem, destino, data, turno, usuario,
-  onTrocarSetor, onTrocarTurno, onTrocarData, onTrocarOrigem, onTrocarDestino, onInverter
+  onTrocarSetor, onTrocarLoja, onTrocarTurno, onTrocarData, onTrocarOrigem, onTrocarDestino, onInverter
 }) {
   const rotulos = useRotulos()
   const secundarios = [
-    loja != null && { chave: 'loja', label: rotulos.loja, valor: loja, onClick: onTrocarSetor },
+    // `onTrocarLoja` (11/10/2026, Recebimento): quando Loja e Setor têm fluxos de troca
+    // INDEPENDENTES (ex. Setor sempre fixo em "Estoque", só a Loja/CNPJ muda) — sem ele, cai no
+    // comportamento de sempre (um clique só pros dois, `onTrocarSetor`).
+    loja != null && { chave: 'loja', label: rotulos.loja, valor: loja, onClick: onTrocarLoja || onTrocarSetor },
     data != null && { chave: 'data', label: 'Data', valor: data, onClick: onTrocarData },
     usuario != null && { chave: 'usuario', label: rotulos.usuario, valor: usuario },
     turno != null && { chave: 'turno', label: rotulos.turno, valor: turno, onClick: onTrocarTurno }

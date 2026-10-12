@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import BuscaProdutoPerda from './BuscaProdutoPerda'
 import BuscaFornecedor from './BuscaFornecedor'
-import TrocarLocalRecebimentoModal from './TrocarLocalRecebimentoModal'
+import TrocarLojaRecebimentoModal from './TrocarLojaRecebimentoModal'
 import ContextoLancamento from './ContextoLancamento'
 import Modal from './Modal'
 import Topbar from './Topbar'
@@ -21,15 +21,16 @@ function agora() {
 // NF (se tiver), data (automático), horário (automático), item (apenas insumos base, matéria-
 // prima), e quantidade." Data/horário não são campos editáveis de propósito — é "chegou agora",
 // não um lançamento retroativo como Perdas/Contagem.
-export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onErro, onSair }) {
+export default function RecebimentoForm({ usuario, onPronto, onErro, onSair }) {
   const rotulos = useRotulos()
   const [locais, setLocais] = useState([])
   const [unidades, setUnidades] = useState([])
-  // Pedido do Felipe (08/10/2026, "puxa tudo automático... pra tudo e todos"): quem tem Setor
-  // padrão vinculado já entra com o local certo — ainda dá pra trocar no select, é escolha de uma
-  // vez só (não um cabeçalho de sessão, como Perdas).
-  const [localEstoqueId, setLocalEstoqueId] = useState(localPadraoId || '')
-  const [trocandoSetor, setTrocandoSetor] = useState(false)
+  // Setor sempre "Estoque" — pedido do Felipe (11/10/2026): "os itens vão entrar por DOM ou Dalva
+  // e tudo entra direto pelo estoque", não precisa (nem faz sentido) trocar de Setor aqui. Loja
+  // (DOM/Dalva, CNPJ de verdade) é independente — pra bater com a nota fiscal depois.
+  const [localEstoqueId, setLocalEstoqueId] = useState('')
+  const [unidadeId, setUnidadeId] = useState('')
+  const [trocandoLoja, setTrocandoLoja] = useState(false)
   const [fornecedor, setFornecedor] = useState('')
   const [numeroNota, setNumeroNota] = useState('')
   const [produto, setProduto] = useState(null)
@@ -40,8 +41,26 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
   const [erro, setErro] = useState('')
   const [concluido, setConcluido] = useState(null)
 
-  useEffect(() => { listarLocaisEstoque().then(setLocais).catch((e) => onErro(e.message)) }, [onErro])
+  useEffect(() => {
+    listarLocaisEstoque()
+      .then((ls) => {
+        setLocais(ls)
+        const estoque = ls.find((l) => l.nome.trim().toLowerCase() === 'estoque')
+        setLocalEstoqueId(estoque?.id || '')
+        if (!estoque) onErro('Não achei o Setor "Estoque" cadastrado — confere em Admin → Lojas e Setores.')
+      })
+      .catch((e) => onErro(e.message))
+  }, [onErro])
   useEffect(() => { listarUnidades().then(setUnidades).catch(() => {}) }, [])
+
+  // Só as Lojas com CNPJ de verdade — dedupe por CNPJ (várias "sub-lojas" dividem o mesmo CNPJ).
+  const lojasReais = []
+  const cnpjsVistos = new Set()
+  unidades.forEach((u) => {
+    if (!u.cnpj || cnpjsVistos.has(u.cnpj)) return
+    cnpjsVistos.add(u.cnpj)
+    lojasReais.push(u)
+  })
 
   const qtd = Number(String(quantidade).replace(',', '.'))
 
@@ -63,7 +82,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
     setSalvando(true)
     setErro('')
     try {
-      await criarRecebimento({ localEstoqueId, codigoEverest: produto.codigo_everest, quantidade: qtd, fornecedor, numeroNota, usuario })
+      await criarRecebimento({ localEstoqueId, unidadeId, codigoEverest: produto.codigo_everest, quantidade: qtd, fornecedor, numeroNota, usuario })
       setConcluido(`${produto.nome} · ${qtd} ${produto.unidade_medida}`)
     } catch (e) {
       setErro('Não consegui registrar — ' + e.message)
@@ -77,7 +96,7 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
     setErro('')
     try {
       await excluirRecebimento(parecido.id)
-      await criarRecebimento({ localEstoqueId, codigoEverest: produto.codigo_everest, quantidade: qtd, fornecedor, numeroNota, usuario })
+      await criarRecebimento({ localEstoqueId, unidadeId, codigoEverest: produto.codigo_everest, quantidade: qtd, fornecedor, numeroNota, usuario })
       setConcluido(`${produto.nome} · ${qtd} ${produto.unidade_medida}`)
     } catch (e) {
       setErro('Não consegui concluir — ' + e.message)
@@ -97,10 +116,10 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
     setConcluido(null)
   }
 
-  const pronto = localEstoqueId && fornecedor.trim().length >= 2 && produto && qtd > 0
+  const pronto = localEstoqueId && unidadeId && fornecedor.trim().length >= 2 && produto && qtd > 0
 
   const localAtual = locais.find((l) => l.id === localEstoqueId)
-  const lojaAtual = localAtual && unidades.find((u) => u.id === localAtual.unidade_id)
+  const lojaAtual = unidades.find((u) => u.id === unidadeId)
 
   // Ícone de lixeira no cabeçalho (08/10/2026, "quero todos com isso" — mesma cara de Perdas e
   // Contagem): aqui não existe sessão salva pra excluir de verdade, só limpa o que a pessoa ainda
@@ -124,20 +143,19 @@ export default function RecebimentoForm({ usuario, localPadraoId, onPronto, onEr
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <ContextoLancamento
-          loja={lojaAtual?.nome || null}
+          loja={lojaAtual?.nome || `sem ${rotulos.loja.toLowerCase()}`}
           setor={localAtual?.nome || `sem ${rotulos.setor.toLowerCase()}`}
           data={agora()}
           usuario={usuario}
-          onTrocarSetor={() => setTrocandoSetor(true)}
+          onTrocarLoja={() => setTrocandoLoja(true)}
         />
 
-        {trocandoSetor && (
-          <TrocarLocalRecebimentoModal
-            unidades={unidades}
-            locais={locais}
-            localAtualId={localEstoqueId}
-            onFechar={() => setTrocandoSetor(false)}
-            onConfirmar={(localNovo) => { setLocalEstoqueId(localNovo?.id || ''); setTrocandoSetor(false) }}
+        {trocandoLoja && (
+          <TrocarLojaRecebimentoModal
+            lojasReais={lojasReais}
+            unidadeAtualId={unidadeId}
+            onFechar={() => setTrocandoLoja(false)}
+            onConfirmar={(lojaNova) => { setUnidadeId(lojaNova?.id || ''); setTrocandoLoja(false) }}
           />
         )}
 
