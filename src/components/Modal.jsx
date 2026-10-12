@@ -32,7 +32,15 @@ export default function Modal({ children, onFechar, largura = 320 }) {
   }, [])
 
   const estiloFundo = janela ? { top: janela.topo, left: 0, right: 0, height: janela.altura, bottom: 'auto' } : undefined
-  const estiloCaixa = { maxWidth: largura, ...(janela ? { maxHeight: janela.altura - 40 } : null) }
+  // 12/10/2026, pedido do Felipe (testou num tablet, "está pequeno"): os popups "grandes" (>= 400px
+  // — Recebimento, Produção, Perdas, Contagem, Operação, que abrem a tela inteira dentro de um
+  // Modal, ver HomeScreen.jsx) ficavam travados nesse tamanho de celular mesmo numa tela de
+  // 768-1024px. Os popups PEQUENOS (confirmação de 2 passos, PIN etc., sempre < 400px) continuam
+  // do jeito que são — uma confirmação curta não precisa (nem fica bonita) esticada. `clamp` deixa
+  // o mínimo igual ao de hoje (não muda nada no celular, onde `vw` já é menor que `largura`) e cresce
+  // suave com a largura real da tela até um teto, sem precisar de media query nem JS de resize.
+  const maxWidth = largura >= 400 ? `clamp(${largura}px, 58vw, 680px)` : largura
+  const estiloCaixa = { maxWidth, ...(janela ? { maxHeight: janela.altura - 40 } : null) }
 
   return (
     <div className="modal-fundo" style={estiloFundo} onClick={onFechar}>
