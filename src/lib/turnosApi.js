@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { criarTransferenciaImediata } from './requisicaoTransferenciaApi'
 import { buscarTurnoAberto, turnoVencido } from './turnosLeitura'
+import { listarSaldosCalculados, registrarMovimento } from './estoqueMovimentosApi'
 
 export { buscarTurnoAberto, listarTurnosAbertos, listarTurnosHistorico, turnoVencido, periodoDoTurno, LABEL_PERIODO, exigirPracaAbertaHoje } from './turnosLeitura'
 
@@ -77,6 +78,80 @@ export async function fecharTurno({ turnoId, localDestinoId, itens, usuario }) {
   const { error } = await supabase
     .from('turnos')
     .update({ status: 'fechado', fechado_em: new Date().toISOString(), fechado_por: usuario || null })
+    .eq('id', turnoId)
+  if (error) throw error
+}
+
+// Último fechamento de um Setor — usado só pra SUGERIR a abertura do dia seguinte (mostra o que
+// foi contado/devolvido, a pessoa confirma, edita ou adiciona; nunca reabre sozinho sem
+// confirmação explícita). `itens_fechamento` é o snapshot gravado por `fecharTurnoComContagem`.
+export async function buscarUltimoFechamento(localEstoqueId) {
+  const { data, error } = await supabase
+    .from('turnos')
+    .select('itens_fechamento, fechado_em')
+    .eq('local_estoque_id', localEstoqueId)
+    .eq('status', 'fechado')
+    .order('fechado_em', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
+// Fechamento COM contagem — só pra Setor tipo 'cozinha' (migration_v30.sql, pedido do Felipe,
+// 12/10/2026): recebe porcionado todo dia e precisa devolver a sobra pra câmara à noite, mas sem
+// CONTAR de verdade o saldo calculado da praça só cresce, nunca reflete o consumo real do serviço.
+//
+// `itensContados` = tudo que a pessoa viu fisicamente na praça agora — [{codigoEverest, quantidade}].
+// Faz 2 coisas: (1) pra TODO item que hoje tem saldo calculado ali, lança um `ajuste_contagem` com
+// a diferença pro contado (quem não aparecer na lista é tratado como contado = 0, de propósito —
+// contagem é "o que eu vi agora", não "o que eu lembrei de listar"); (2) devolve pro destino
+// (Estoque) exatamente o que foi contado — "tudo volta pra câmara fria", igual ao modelo original
+// do turno (ver comentário no topo deste arquivo). Resultado: a praça fecha sempre zerada no
+// calculado, igual à realidade física.
+export async function fecharTurnoComContagem({ turnoId, localDestinoId, itensContados, usuario }) {
+  const { data: turno, error: erroT } = await supabase.from('turnos').select('*').eq('id', turnoId).single()
+  if (erroT) throw erroT
+  if (turno.status !== 'aberto') throw new Error('Essa praça já está fechada.')
+
+  const saldosAtuais = await listarSaldosCalculados(turno.local_estoque_id)
+  const contadoPorCodigo = new Map(itensContados.map((i) => [i.codigoEverest, Number(i.quantidade)]))
+
+  for (const linha of saldosAtuais) {
+    const calculado = Number(linha.saldo)
+    const contado = contadoPorCodigo.get(linha.codigo_everest) ?? 0
+    const diferenca = contado - calculado
+    if (Math.abs(diferenca) > 0.001) {
+      await registrarMovimento({
+        localEstoqueId: turno.local_estoque_id, codigoEverest: linha.codigo_everest,
+        quantidade: diferenca, tipo: 'ajuste_contagem', turnoId, usuario
+      })
+    }
+  }
+  // Item contado que a praça nunca tinha saldo calculado (ex.: chegou lá sem passar por
+  // transferência) também vira ajuste, senão a devolução abaixo ia tentar tirar de onde não tem.
+  for (const [codigoEverest, quantidade] of contadoPorCodigo) {
+    const jaTinhaSaldo = saldosAtuais.some((l) => l.codigo_everest === codigoEverest)
+    if (!jaTinhaSaldo && Math.abs(quantidade) > 0.001) {
+      await registrarMovimento({ localEstoqueId: turno.local_estoque_id, codigoEverest, quantidade, tipo: 'ajuste_contagem', turnoId, usuario })
+    }
+  }
+
+  for (const [codigoEverest, quantidade] of contadoPorCodigo) {
+    if (quantidade > 0.001) {
+      await criarTransferenciaImediata({
+        localOrigemId: turno.local_estoque_id, localDestinoId,
+        codigoEverest, quantidade, usuario, turnoId
+      })
+    }
+  }
+
+  const { error } = await supabase
+    .from('turnos')
+    .update({
+      status: 'fechado', fechado_em: new Date().toISOString(), fechado_por: usuario || null,
+      itens_fechamento: itensContados
+    })
     .eq('id', turnoId)
   if (error) throw error
 }

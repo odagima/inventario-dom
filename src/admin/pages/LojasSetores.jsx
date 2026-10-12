@@ -290,6 +290,12 @@ function SecaoSetores() {
         excluir (o histórico de lançamentos depende dele) — desmarque "ativo" pra tirar das listas
         sem apagar nada.
       </p>
+      <p className="muted" style={{ margin: '0 0 12px', fontSize: 12 }}>
+        <strong>Tipo de operação</strong> (12/10/2026): Cozinha recebe porcionado todo dia e precisa
+        devolver a sobra à noite — só esse tipo passa a exigir contagem no fechamento da praça (ver
+        Abrir/Fechar praça). Produção e Fixo (Bar, Salão) continuam exatamente como hoje — é só
+        classificação, sem travar nada.
+      </p>
 
       <div className="card" style={{ marginBottom: 14 }}>
         <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Novo {rotulos.setor.toLowerCase()}</p>
@@ -332,6 +338,16 @@ function SecaoSetores() {
                 >
                   <option value="">Sem {rotulos.loja.toLowerCase()}</option>
                   {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                </select>
+                <select
+                  value={s.tipo_operacao || ''}
+                  onChange={(e) => handleAtualizarCampo(s, 'tipo_operacao', e.target.value || null)}
+                  style={{ fontSize: 12.5, padding: '6px 8px' }}
+                >
+                  <option value="">Sem tipo</option>
+                  <option value="producao">Produção</option>
+                  <option value="fixo">Fixo (Bar, Salão…)</option>
+                  <option value="cozinha">Cozinha</option>
                 </select>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }} className="muted">
                   <input type="checkbox" checked={s.ativo} onChange={(e) => handleAtualizarCampo(s, 'ativo', e.target.checked)} />
