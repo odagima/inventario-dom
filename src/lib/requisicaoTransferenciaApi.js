@@ -47,9 +47,11 @@ export async function listarRequisicoesHistorico(limite = 200) {
 export async function criarRequisicao({ localSolicitanteId, localAtendenteId, codigoEverest, quantidadeSolicitada, usuario, observacao }) {
   if (localSolicitanteId === localAtendenteId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidadeSolicitada) > 0)) throw new Error('Informe uma quantidade maior que zero.')
-  // Pedido do Felipe (09/10/2026): quem atende é quem fisicamente tira o item da praça agora —
-  // precisa estar com a operação aberta hoje. Quem só está pedindo (solicitante) não precisa.
-  await exigirPracaAbertaHoje(localAtendenteId)
+  // Pedido do Felipe (12/10/2026, revertendo a decisão de 09/10 documentada abaixo — testou ao vivo
+  // e viu que não fazia sentido): quem precisa estar com a operação aberta é quem está PEDINDO
+  // (solicitante) — é o setor que tem alguém de verdade na praça agora. O atendente (normalmente o
+  // Estoque Central) não precisa estar aberto pra liberar material.
+  await exigirPracaAbertaHoje(localSolicitanteId)
   const { data, error } = await supabase
     .from('requisicoes')
     .insert({
@@ -83,9 +85,6 @@ export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora,
   if (erroReq) throw erroReq
   const qtd = Number(quantidadeAtendidaAgora)
   if (!(qtd > 0)) throw new Error('Informe uma quantidade maior que zero.')
-  // Atendimento manual (requisicao_exige_aprovacao ligado) pode acontecer bem depois da criação,
-  // por outra pessoa — confere de novo se a praça de quem atende ainda está aberta hoje.
-  await exigirPracaAbertaHoje(req.local_atendente_id)
   const jaAtendido = Number(req.quantidade_atendida || 0)
   const totalAtendido = jaAtendido + qtd
   const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
