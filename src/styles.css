@@ -152,6 +152,25 @@ select option {
   padding: 20px;
 }
 
+/* 12/10/2026, pedido do Felipe (testou num tablet, "está pequeno"): `.screen` é a base de TODAS
+   as telas operacionais (Home, Produção, Recebimento, Requisição, Contagem, Perdas, Painel de
+   Controle etc.) e ficava travada em 480px mesmo num tablet de 768-1024px de largura — sobrava
+   uma faixa enorme vazia dos dois lados e tudo (texto, botão, grade de ícones) continuava do
+   tamanho de celular. Cresce em 2 degraus (tablet retrato / tablet paisagem e acima) — o conteúdo
+   dentro de `.screen` já é fluido (`width: 100%` em input/select/button), então só alargar o
+   contêiner já faz tudo crescer proporcionalmente, sem precisar reescrever cada tela.
+   `.modal-caixa` (Modal.jsx, usa `largura` próprio por popup) fica de fora de propósito — os
+   popups são pequenos por design, não telas cheias. */
+@media (min-width: 640px) {
+  .screen { max-width: 640px; }
+  .icon-grid { gap: 16px; }
+  .icon-tile { height: 112px; font-size: 12.5px; }
+}
+@media (min-width: 1000px) {
+  .screen { max-width: 820px; padding: 28px; }
+  .app-header .brand { font-size: 32px; }
+}
+
 .app-header {
   padding-bottom: 16px;
   margin-bottom: 20px;
