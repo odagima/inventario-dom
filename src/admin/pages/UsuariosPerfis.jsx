@@ -11,6 +11,7 @@ import {
   listarUnidadesAdmin
 } from '../lib/adminApi'
 import { listarLocaisEstoque } from '../../lib/locaisEstoqueApi'
+import Modal from '../../components/Modal'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 02/09/2026 (§67) — USUÁRIOS E PERFIS, numa tela só.
@@ -251,36 +252,42 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
           )}
 
           {editando && podeEditar && (
-            <PainelPessoa
-              usuario={editando}
-              perfis={perfis}
-              unidades={unidades}
-              locais={locais}
-              semMigracao={semMigracao}
-              onFechar={() => setEditando(null)}
-              onSalvar={async (mudancas) => {
-                await acao(async () => {
-                  if (mudancas.nome != null && mudancas.nome !== editando.nome_completo) {
-                    await editarNomeUsuarioApp(editando.id, mudancas.nome)
-                  }
-                  if (mudancas.localEstoquePadraoId !== undefined) {
-                    await atualizarLocalPadraoUsuario(editando.id, mudancas.localEstoquePadraoId)
-                  }
-                  const temAcesso = mudancas.perfilId !== undefined || mudancas.unidadeId !== undefined ||
-                    mudancas.limparUnidade || mudancas.pin || mudancas.ativo !== undefined
-                  if (temAcesso) {
-                    await atualizarAcessoUsuario(editando.id, {
-                      perfilId: mudancas.perfilId ?? null,
-                      unidadeId: mudancas.unidadeId ?? null,
-                      limparUnidade: !!mudancas.limparUnidade,
-                      pin: mudancas.pin || null,
-                      ativo: mudancas.ativo
-                    })
-                  }
-                }, 'Alterações salvas.')
-                setEditando(null)
-              }}
-            />
+            // 12/10/2026, pedido do Felipe: editar abria um painel lá em cima da tela — com a
+            // lista de usuários comprida, editar alguém do meio/fim exigia rolar pra cima pra ver o
+            // painel e rolar de novo pra voltar pra lista. Popup aparece na hora, por cima de onde a
+            // pessoa já está.
+            <Modal onFechar={() => setEditando(null)} largura={520}>
+              <PainelPessoa
+                usuario={editando}
+                perfis={perfis}
+                unidades={unidades}
+                locais={locais}
+                semMigracao={semMigracao}
+                onFechar={() => setEditando(null)}
+                onSalvar={async (mudancas) => {
+                  await acao(async () => {
+                    if (mudancas.nome != null && mudancas.nome !== editando.nome_completo) {
+                      await editarNomeUsuarioApp(editando.id, mudancas.nome)
+                    }
+                    if (mudancas.localEstoquePadraoId !== undefined) {
+                      await atualizarLocalPadraoUsuario(editando.id, mudancas.localEstoquePadraoId)
+                    }
+                    const temAcesso = mudancas.perfilId !== undefined || mudancas.unidadeId !== undefined ||
+                      mudancas.limparUnidade || mudancas.pin || mudancas.ativo !== undefined
+                    if (temAcesso) {
+                      await atualizarAcessoUsuario(editando.id, {
+                        perfilId: mudancas.perfilId ?? null,
+                        unidadeId: mudancas.unidadeId ?? null,
+                        limparUnidade: !!mudancas.limparUnidade,
+                        pin: mudancas.pin || null,
+                        ativo: mudancas.ativo
+                      })
+                    }
+                  }, 'Alterações salvas.')
+                  setEditando(null)
+                }}
+              />
+            </Modal>
           )}
 
           {porPerfil.length === 0 && <p className="muted">Ninguém encontrado com esse filtro.</p>}
@@ -300,10 +307,13 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
                 {g.pessoas.map((u, i) => (
                   <div
                     key={u.id}
+                    onClick={() => podeEditar && (setEditando(u), setNovoAberto(false))}
                     style={{
                       display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center',
-                      padding: '8px 0', borderTop: i === 0 ? 'none' : '1px solid var(--border)',
-                      opacity: u.ativo === false ? 0.55 : 1
+                      padding: '8px 6px', margin: '0 -6px', borderRadius: 10,
+                      borderTop: i === 0 ? 'none' : '1px solid var(--border)',
+                      opacity: u.ativo === false ? 0.55 : 1,
+                      cursor: podeEditar ? 'pointer' : 'default'
                     }}
                   >
                     <div style={{ minWidth: 0 }}>
@@ -317,13 +327,9 @@ export default function UsuariosPerfis({ usuarioLogado = null }) {
                         {!u.perfil_nome && u.nivel_acesso ? ` · nível ${u.nivel_acesso}` : ''}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, fontSize: 12 }}>
+                    {/* `stopPropagation` — revelar/esconder o PIN não pode também abrir o popup de edição. */}
+                    <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, fontSize: 12 }} onClick={(e) => e.stopPropagation()}>
                       <PinOculto pin={u.pin} />
-                      {podeEditar && (
-                        <button className="ghost" style={{ fontSize: 11.5, padding: '4px 8px' }} onClick={() => { setEditando(u); setNovoAberto(false) }}>
-                          editar
-                        </button>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -471,7 +477,7 @@ function PainelPessoa({ usuario, perfis, unidades, locais, semMigracao, onFechar
   const pinOk = pin === '' || /^[0-9]{4}$/.test(pin)
 
   return (
-    <div style={{ ...card, borderColor: 'var(--text)' }}>
+    <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
         <p className="muted" style={{ ...rotulo, margin: 0 }}>Editando · {usuario.nome_completo}</p>
         <button className="ghost" style={{ fontSize: 11.5, padding: '2px 8px' }} onClick={onFechar}>fechar</button>
