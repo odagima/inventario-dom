@@ -13,8 +13,8 @@ import { exigirPracaAbertaHoje } from './turnosLeitura'
 // transferência continua sem gate, por design (quem manda já tem o material em mãos).
 
 const SELECT_REQUISICAO = `
-  id, codigo_everest, quantidade_solicitada, quantidade_atendida, status,
-  usuario_solicitante, usuario_atendente, solicitado_em, atendido_em, observacao,
+  id, codigo_everest, quantidade_solicitada, quantidade_atendida, quantidade_atendida_pendente, status,
+  usuario_solicitante, usuario_atendente, solicitado_em, atendido_em, observacao, destinatario_esperado,
   solicitante:locais_estoque!requisicoes_local_solicitante_id_fkey ( id, nome ),
   atendente:locais_estoque!requisicoes_local_atendente_id_fkey ( id, nome )
 `
@@ -23,6 +23,20 @@ export async function listarRequisicoesPendentes(localAtendenteId) {
   let q = supabase.from('requisicoes').select(SELECT_REQUISICAO).in('status', ['pendente', 'atendida_parcial'])
   if (localAtendenteId) q = q.eq('local_atendente_id', localAtendenteId)
   const { data, error } = await q.order('solicitado_em', { ascending: true })
+  if (error) throw error
+  return data || []
+}
+
+// Rodadas de atendimento já feitas, esperando o SOLICITANTE contar e confirmar a própria
+// quantidade (migration_v31.sql, `requisicao_exige_confirmacao_quantidade`) — só existem enquanto
+// esse interruptor estiver ligado; com ele desligado, nunca fica nada aqui (atenderRequisicao já
+// credita na hora, igual sempre foi).
+export async function listarRequisicoesAguardandoConfirmacao() {
+  const { data, error } = await supabase
+    .from('requisicoes')
+    .select(SELECT_REQUISICAO)
+    .eq('status', 'aguardando_confirmacao')
+    .order('atendido_em', { ascending: true })
   if (error) throw error
   return data || []
 }
@@ -80,19 +94,52 @@ export async function criarRequisicao({ localSolicitanteId, localAtendenteId, co
 // pedido do Felipe (06/10/2026): "não aceitou com valor diferente do requisitado, nem maior nem
 // menor". Quem decide o quanto enviar é o estoquista que está atendendo (ver `podeAtenderRequisicao`
 // em src/lib/permissoes.js), não uma trava de quantidade.
-export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora, usuario }) {
+//
+// `destinatarioEsperado` (migration_v31.sql, 12/10/2026) é sempre gravado, sem travar nada — só
+// mapeamento de quem o atendente espera que vá retirar ("Rafael atendeu, destinatário Humberto").
+//
+// `requisicao_exige_confirmacao_quantidade` (mesma migração, desligado por padrão): quando ligado,
+// esta função PARA de creditar o solicitante na hora — debita o atendente (ele já tirou da
+// prateleira, isso não muda) e deixa a rodada em `aguardando_confirmacao`, esperando o solicitante
+// contar e confirmar a PRÓPRIA quantidade (`confirmarRecebimentoRequisicao` abaixo). Só uma rodada
+// pendente por vez: não dá pra atender de novo até a pendente ser confirmada.
+export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora, usuario, destinatarioEsperado }) {
   const { data: req, error: erroReq } = await supabase.from('requisicoes').select('*').eq('id', requisicaoId).single()
   if (erroReq) throw erroReq
+  if (req.status === 'aguardando_confirmacao') {
+    throw new Error('Já tem uma rodada esperando o solicitante confirmar — não dá pra atender de novo antes disso.')
+  }
   const qtd = Number(quantidadeAtendidaAgora)
   if (!(qtd > 0)) throw new Error('Informe uma quantidade maior que zero.')
-  const jaAtendido = Number(req.quantidade_atendida || 0)
-  const totalAtendido = jaAtendido + qtd
-  const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
 
   await registrarMovimento({
     localEstoqueId: req.local_atendente_id, codigoEverest: req.codigo_everest, quantidade: -qtd,
     tipo: 'requisicao_saida', requisicaoId, usuario
   })
+
+  let exigeConfirmacao = false
+  try { exigeConfirmacao = await buscarConfiguracao('requisicao_exige_confirmacao_quantidade') } catch { /* configuração ainda não existe — trata como desligada */ }
+
+  if (exigeConfirmacao) {
+    const { error } = await supabase
+      .from('requisicoes')
+      .update({
+        status: 'aguardando_confirmacao',
+        quantidade_atendida_pendente: qtd,
+        usuario_atendente: usuario || null,
+        atendido_em: new Date().toISOString(),
+        destinatario_esperado: destinatarioEsperado?.trim() || null
+      })
+      .eq('id', requisicaoId)
+    if (error) throw error
+    return
+  }
+
+  // Desligado (padrão hoje): credita na hora, exatamente como sempre foi.
+  const jaAtendido = Number(req.quantidade_atendida || 0)
+  const totalAtendido = jaAtendido + qtd
+  const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
+
   await registrarMovimento({
     localEstoqueId: req.local_solicitante_id, codigoEverest: req.codigo_everest, quantidade: qtd,
     tipo: 'requisicao_entrada', requisicaoId, usuario
@@ -103,14 +150,45 @@ export async function atenderRequisicao(requisicaoId, { quantidadeAtendidaAgora,
     .update({
       quantidade_atendida: totalAtendido, status,
       usuario_atendente: usuario || null,
-      atendido_em: status === 'atendida' ? new Date().toISOString() : req.atendido_em
+      atendido_em: status === 'atendida' ? new Date().toISOString() : req.atendido_em,
+      destinatario_esperado: destinatarioEsperado?.trim() || null
     })
     .eq('id', requisicaoId)
   if (error) throw error
 }
 
+// Confirmação do SOLICITANTE (só existe enquanto `requisicao_exige_confirmacao_quantidade`
+// estiver ligado) — credita com a quantidade que o SOLICITANTE contou, não com a que o atendente
+// disse que liberou. Se divergir, os dois números ficam registrados cada um no seu próprio
+// movimento (`requisicao_saida` com o valor do atendente, `requisicao_entrada` com o valor
+// confirmado) — dá pra comparar os dois depois no histórico de movimentação, sem nenhum
+// sobrescrever o outro.
+export async function confirmarRecebimentoRequisicao(requisicaoId, { quantidadeConfirmada, usuario }) {
+  const { data: req, error: erroReq } = await supabase.from('requisicoes').select('*').eq('id', requisicaoId).single()
+  if (erroReq) throw erroReq
+  if (req.status !== 'aguardando_confirmacao') throw new Error('Essa requisição não está esperando confirmação.')
+
+  const confirmado = quantidadeConfirmada != null ? Number(quantidadeConfirmada) : Number(req.quantidade_atendida_pendente)
+  if (!(confirmado >= 0)) throw new Error('Informe uma quantidade válida.')
+
+  await registrarMovimento({
+    localEstoqueId: req.local_solicitante_id, codigoEverest: req.codigo_everest, quantidade: confirmado,
+    tipo: 'requisicao_entrada', requisicaoId, usuario
+  })
+
+  const totalAtendido = Number(req.quantidade_atendida || 0) + confirmado
+  const status = totalAtendido >= Number(req.quantidade_solicitada) - 0.001 ? 'atendida' : 'atendida_parcial'
+
+  const { error } = await supabase
+    .from('requisicoes')
+    .update({ quantidade_atendida: totalAtendido, quantidade_atendida_pendente: null, status })
+    .eq('id', requisicaoId)
+  if (error) throw error
+}
+
 const SELECT_TRANSFERENCIA = `
-  id, codigo_everest, quantidade, status, usuario_envio, usuario_recebimento, enviado_em, recebido_em,
+  id, codigo_everest, quantidade, quantidade_recebida, status, usuario_envio, usuario_recebimento,
+  enviado_em, recebido_em, destinatario_esperado,
   origem:locais_estoque!transferencias_local_origem_id_fkey ( id, nome ),
   destino:locais_estoque!transferencias_local_destino_id_fkey ( id, nome )
 `
@@ -135,7 +213,10 @@ export async function listarTransferenciasHistorico(limite = 200) {
 
 // Debita a origem no envio — fica "em trânsito" (nem origem nem destino têm o produto nesse
 // meio-tempo) até o destino confirmar recebimento, que credita de verdade.
-export async function criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario, turnoId }) {
+//
+// `destinatarioEsperado` (migration_v31.sql, 12/10/2026) é sempre gravado, sem travar nada — só
+// mapeamento de quem quem manda espera que vá receber ("Rafael mandou, destinatário Humberto").
+export async function criarTransferencia({ localOrigemId, localDestinoId, codigoEverest, quantidade, usuario, turnoId, destinatarioEsperado }) {
   if (localOrigemId === localDestinoId) throw new Error('Origem e destino precisam ser diferentes.')
   if (!(Number(quantidade) > 0)) throw new Error('Informe uma quantidade maior que zero.')
   // Pedido do Felipe (09/10/2026): quem manda é quem já tem o material em mãos agora — precisa
@@ -148,7 +229,7 @@ export async function criarTransferencia({ localOrigemId, localDestinoId, codigo
     .insert({
       local_origem_id: localOrigemId, local_destino_id: localDestinoId,
       codigo_everest: codigoEverest, quantidade: Number(quantidade), usuario_envio: usuario || null,
-      turno_id: turnoId || null
+      turno_id: turnoId || null, destinatario_esperado: destinatarioEsperado?.trim() || null
     })
     .select()
     .single()
@@ -184,19 +265,28 @@ export async function removerTransferenciaCompleta(transferenciaId) {
   if (error) throw error
 }
 
-export async function confirmarRecebimentoTransferencia(transferenciaId, usuario) {
+// `quantidadeRecebida` (migration_v31.sql, 12/10/2026) é opcional — quando não vier (uso de
+// sempre, e o caso de `criarTransferenciaImediata` abaixo), credita com a quantidade enviada,
+// exatamente como sempre foi. Só quando `transferencia_exige_confirmacao_quantidade` estiver
+// ligado é que a tela passa um número PRÓPRIO contado por quem recebe — se divergir do que foi
+// enviado, os dois ficam registrados (o `transferencia_saida` guarda o enviado, este
+// `transferencia_entrada` guarda o recebido), sem um sobrescrever o outro.
+export async function confirmarRecebimentoTransferencia(transferenciaId, usuario, quantidadeRecebida) {
   const { data: transferencia, error: erroT } = await supabase.from('transferencias').select('*').eq('id', transferenciaId).single()
   if (erroT) throw erroT
   if (transferencia.status !== 'enviada') throw new Error('Essa transferência já foi recebida ou cancelada.')
 
+  const recebido = quantidadeRecebida != null ? Number(quantidadeRecebida) : Number(transferencia.quantidade)
+  if (!(recebido >= 0)) throw new Error('Informe uma quantidade válida.')
+
   await registrarMovimento({
-    localEstoqueId: transferencia.local_destino_id, codigoEverest: transferencia.codigo_everest, quantidade: Number(transferencia.quantidade),
+    localEstoqueId: transferencia.local_destino_id, codigoEverest: transferencia.codigo_everest, quantidade: recebido,
     tipo: 'transferencia_entrada', transferenciaId, turnoId: transferencia.turno_id, usuario
   })
 
   const { error } = await supabase
     .from('transferencias')
-    .update({ status: 'recebida', usuario_recebimento: usuario || null, recebido_em: new Date().toISOString() })
+    .update({ status: 'recebida', usuario_recebimento: usuario || null, recebido_em: new Date().toISOString(), quantidade_recebida: recebido })
     .eq('id', transferenciaId)
   if (error) throw error
 }

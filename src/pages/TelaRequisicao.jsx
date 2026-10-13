@@ -6,10 +6,13 @@ import ContextoLancamento from '../components/ContextoLancamento'
 import { listarLocaisEstoque } from '../lib/locaisEstoqueApi'
 import { buscarSaldoCalculado } from '../lib/estoqueMovimentosApi'
 import { podeAtenderRequisicao } from '../lib/permissoes'
+import { buscarConfiguracao } from '../lib/configuracoesApi'
 import {
   listarRequisicoesPendentes,
+  listarRequisicoesAguardandoConfirmacao,
   criarRequisicao,
   atenderRequisicao,
+  confirmarRecebimentoRequisicao,
   listarTransferenciasPendentes,
   criarTransferencia,
   confirmarRecebimentoTransferencia
@@ -40,15 +43,25 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
   const [locais, setLocais] = useState([])
   const [pendentesReq, setPendentesReq] = useState([])
   const [pendentesTransf, setPendentesTransf] = useState([])
+  const [aguardandoConfirmacao, setAguardandoConfirmacao] = useState([])
+  // Interruptor (Admin → Configurações do sistema, migration_v31.sql) — desligado por padrão;
+  // enquanto estiver desligado, nada muda em como a tela se comporta hoje. O lado da Requisição
+  // não precisa de um interruptor próprio aqui: o comportamento já é decidido no servidor
+  // (atenderRequisicao) e reflete sozinho — se o interruptor tiver ligado, a rodada aparece em
+  // `aguardandoConfirmacao`; se não, nunca aparece nada ali.
+  const [exigeConfirmacaoTransferencia, setExigeConfirmacaoTransferencia] = useState(false)
   const [carregando, setCarregando] = useState(true)
   const [erro, setErro] = useState('')
 
   const carregar = useCallback(async () => {
     try {
-      const [f, pr, pt] = await Promise.all([
-        listarLocaisEstoque(), listarRequisicoesPendentes(), listarTransferenciasPendentes()
+      const [f, pr, pt, ac, ect] = await Promise.all([
+        listarLocaisEstoque(), listarRequisicoesPendentes(), listarTransferenciasPendentes(),
+        listarRequisicoesAguardandoConfirmacao(),
+        buscarConfiguracao('transferencia_exige_confirmacao_quantidade')
       ])
-      setLocais(f); setPendentesReq(pr); setPendentesTransf(pt)
+      setLocais(f); setPendentesReq(pr); setPendentesTransf(pt); setAguardandoConfirmacao(ac)
+      setExigeConfirmacaoTransferencia(!!ect)
       setErro('')
     } catch (e) {
       setErro('Não consegui carregar — ' + e.message)
@@ -87,6 +100,8 @@ export default function TelaRequisicao({ usuarioLogado, onSair, iniciarEmNova = 
           {carregando ? <p className="muted">Carregando…</p> : (
             <Pendentes
               pendentesReq={pendentesReq} pendentesTransf={pendentesTransf}
+              aguardandoConfirmacao={aguardandoConfirmacao}
+              exigeConfirmacaoTransferencia={exigeConfirmacaoTransferencia}
               usuario={usuarioLogado?.nome} usuarioLogado={usuarioLogado}
               onMudou={carregar} onErro={setErro}
             />
@@ -104,6 +119,9 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
   // Transferência são operação entre DOIS locais, então só dá pra automatizar um lado.
   const [origemId, setOrigemId] = useState(tipo === 'transferencia' ? (localPadraoId || '') : '')
   const [destinoId, setDestinoId] = useState(tipo === 'requisicao' ? (localPadraoId || '') : '')
+  // Pedido do Felipe (12/10/2026, migration_v31.sql): quem manda numa transferência já sabe pra
+  // quem está mandando — só mapeamento, não trava nada (fica vazio se não quiser preencher).
+  const [destinatarioEsperado, setDestinatarioEsperado] = useState('')
   const [produto, setProduto] = useState(null)
   const [quantidade, setQuantidade] = useState('')
   const [disponivel, setDisponivel] = useState(null)
@@ -156,7 +174,8 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
       } else {
         await criarTransferencia({
           localOrigemId: origemId, localDestinoId: destinoId,
-          codigoEverest: produto.codigo_everest, quantidade: qtd, usuario
+          codigoEverest: produto.codigo_everest, quantidade: qtd, usuario,
+          destinatarioEsperado
         })
         mensagem = 'Transferência enviada — aguardando o destino confirmar recebimento.'
       }
@@ -176,6 +195,7 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
     setProduto(null)
     setQuantidade('')
     setDisponivel(null)
+    setDestinatarioEsperado('')
   }
 
   return (
@@ -217,6 +237,17 @@ function FormNova({ locais, tipo, setTipo, usuario, localPadraoId, onPronto, onS
           onFechar={() => setTrocandoDestino(false)}
           onConfirmar={(id) => { setDestinoId(id); setTrocandoDestino(false) }}
         />
+      )}
+
+      {tipo === 'transferencia' && (
+        <div>
+          <label className="muted">Quem vai receber — opcional</label>
+          <input
+            value={destinatarioEsperado}
+            onChange={(e) => setDestinatarioEsperado(e.target.value)}
+            placeholder="Nome de quem vai receber"
+          />
+        </div>
       )}
 
       <BuscaProduto onSelecionar={setProduto} mostrarCamera={false} />
@@ -286,9 +317,14 @@ function PopupEscolherLocal({ titulo, locais, valorId, onFechar, onConfirmar }) 
   )
 }
 
-function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMudou, onErro }) {
+function Pendentes({ pendentesReq, pendentesTransf, aguardandoConfirmacao, exigeConfirmacaoTransferencia, usuario, usuarioLogado, onMudou, onErro }) {
   const [atendendoId, setAtendendoId] = useState(null)
   const [qtdAtender, setQtdAtender] = useState('')
+  const [destinatarioAtender, setDestinatarioAtender] = useState('')
+  const [recebendoId, setRecebendoId] = useState(null)
+  const [qtdRecebida, setQtdRecebida] = useState('')
+  const [confirmandoId, setConfirmandoId] = useState(null)
+  const [qtdConfirmada, setQtdConfirmada] = useState('')
   const [processando, setProcessando] = useState(false)
   const podeAtender = podeAtenderRequisicao(usuarioLogado)
 
@@ -297,8 +333,8 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
     try {
       const restante = Number(req.quantidade_solicitada) - Number(req.quantidade_atendida || 0)
       const qtd = qtdAtender ? Number(String(qtdAtender).replace(',', '.')) : restante
-      await atenderRequisicao(req.id, { quantidadeAtendidaAgora: qtd, usuario })
-      setAtendendoId(null); setQtdAtender('')
+      await atenderRequisicao(req.id, { quantidadeAtendidaAgora: qtd, usuario, destinatarioEsperado: destinatarioAtender })
+      setAtendendoId(null); setQtdAtender(''); setDestinatarioAtender('')
       await onMudou()
     } catch (e) {
       onErro('Não consegui atender — ' + e.message)
@@ -307,6 +343,8 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
     }
   }
 
+  // Sem o interruptor ligado (padrão hoje), continua exatamente como sempre foi — um toque, sem
+  // contar nada.
   async function confirmarRecebimento(t) {
     setProcessando(true)
     try {
@@ -319,10 +357,42 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
     }
   }
 
+  // Com `transferencia_exige_confirmacao_quantidade` ligado (migration_v31.sql): quem recebe conta
+  // e digita a PRÓPRIA quantidade — pré-preenchida com o que foi enviado, mas editável. Se
+  // divergir, fica registrado nos dois movimentos (saída com o valor de quem mandou, entrada com
+  // o valor confirmado aqui) — nenhum sobrescreve o outro.
+  async function confirmarRecebimentoComContagem(t) {
+    setProcessando(true)
+    try {
+      const qtd = qtdRecebida === '' ? Number(t.quantidade) : Number(String(qtdRecebida).replace(',', '.'))
+      await confirmarRecebimentoTransferencia(t.id, usuario, qtd)
+      setRecebendoId(null); setQtdRecebida('')
+      await onMudou()
+    } catch (e) {
+      onErro('Não consegui confirmar — ' + e.message)
+    } finally {
+      setProcessando(false)
+    }
+  }
+
+  async function confirmarRequisicao(req) {
+    setProcessando(true)
+    try {
+      const qtd = qtdConfirmada === '' ? Number(req.quantidade_atendida_pendente) : Number(String(qtdConfirmada).replace(',', '.'))
+      await confirmarRecebimentoRequisicao(req.id, { quantidadeConfirmada: qtd, usuario })
+      setConfirmandoId(null); setQtdConfirmada('')
+      await onMudou()
+    } catch (e) {
+      onErro('Não consegui confirmar — ' + e.message)
+    } finally {
+      setProcessando(false)
+    }
+  }
+
   // Pedido do Felipe (08/10/2026): duas seções mostrando "Nada pendente." repetido era sem
   // sentido — só aparece o que de fato tem alguma coisa; se não tiver nada em lugar nenhum, UMA
   // mensagem só.
-  if (pendentesReq.length === 0 && pendentesTransf.length === 0) {
+  if (pendentesReq.length === 0 && pendentesTransf.length === 0 && aguardandoConfirmacao.length === 0) {
     return <p className="muted">Nada pendente no momento.</p>
   }
 
@@ -344,10 +414,13 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
                   {!podeAtender ? (
                     <p className="muted" style={{ margin: 0, fontSize: 12 }}>Só estoquista, administrativo ou dev podem atender.</p>
                   ) : atendendoId === r.id ? (
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <input type="number" min="0" step="0.001" value={qtdAtender} onChange={(e) => setQtdAtender(e.target.value)} style={{ flex: 1 }} />
-                      <button className="primary" onClick={() => atender(r)} disabled={processando}>Confirmar</button>
-                      <button className="ghost" onClick={() => { setAtendendoId(null); setQtdAtender('') }}>Cancelar</button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <input type="number" min="0" step="0.001" value={qtdAtender} onChange={(e) => setQtdAtender(e.target.value)} placeholder="Quantidade" />
+                      <input value={destinatarioAtender} onChange={(e) => setDestinatarioAtender(e.target.value)} placeholder="Quem vai buscar — opcional" />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="primary" onClick={() => atender(r)} disabled={processando} style={{ flex: 1 }}>Confirmar</button>
+                        <button className="ghost" onClick={() => { setAtendendoId(null); setQtdAtender(''); setDestinatarioAtender('') }}>Cancelar</button>
+                      </div>
                     </div>
                   ) : (
                     <button className="primary" onClick={() => { setAtendendoId(r.id); setQtdAtender(String(restante)) }}>Atender</button>
@@ -364,9 +437,59 @@ function Pendentes({ pendentesReq, pendentesTransf, usuario, usuarioLogado, onMu
           <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Transferências aguardando recebimento</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {pendentesTransf.map((t) => (
-              <div key={t.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <p style={{ margin: 0 }}>{fmt(t.quantidade)} de {t.codigo_everest} · {t.origem?.nome} → {t.destino?.nome}</p>
-                <button className="primary" onClick={() => confirmarRecebimento(t)} disabled={processando}>Recebi</button>
+              <div key={t.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <p style={{ margin: 0 }}>
+                  {fmt(t.quantidade)} de {t.codigo_everest} · {t.origem?.nome} → {t.destino?.nome}
+                  {t.destinatario_esperado && <span className="muted"> · destinatário: {t.destinatario_esperado}</span>}
+                </p>
+                {!exigeConfirmacaoTransferencia ? (
+                  <button className="primary" onClick={() => confirmarRecebimento(t)} disabled={processando}>Recebi</button>
+                ) : recebendoId === t.id ? (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="number" min="0" step="0.001" value={qtdRecebida}
+                      onChange={(e) => setQtdRecebida(e.target.value)} placeholder={String(t.quantidade)}
+                      style={{ flex: 1 }}
+                    />
+                    <button className="primary" onClick={() => confirmarRecebimentoComContagem(t)} disabled={processando}>Confirmar</button>
+                    <button className="ghost" onClick={() => { setRecebendoId(null); setQtdRecebida('') }}>Cancelar</button>
+                  </div>
+                ) : (
+                  <button className="primary" onClick={() => { setRecebendoId(t.id); setQtdRecebida(String(t.quantidade)) }}>
+                    Conferir e confirmar
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {aguardandoConfirmacao.length > 0 && (
+        <div>
+          <p className="muted" style={{ margin: '0 0 8px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Requisições aguardando sua confirmação</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {aguardandoConfirmacao.map((r) => (
+              <div key={r.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <p style={{ margin: 0 }}>
+                  <strong>{r.atendente?.nome}</strong> disse que liberou {fmt(r.quantidade_atendida_pendente)} de {r.codigo_everest} pra <strong>{r.solicitante?.nome}</strong>
+                  {r.destinatario_esperado && <span className="muted"> · destinatário: {r.destinatario_esperado}</span>}
+                </p>
+                {confirmandoId === r.id ? (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="number" min="0" step="0.001" value={qtdConfirmada}
+                      onChange={(e) => setQtdConfirmada(e.target.value)} placeholder={String(r.quantidade_atendida_pendente)}
+                      style={{ flex: 1 }}
+                    />
+                    <button className="primary" onClick={() => confirmarRequisicao(r)} disabled={processando}>Confirmar</button>
+                    <button className="ghost" onClick={() => { setConfirmandoId(null); setQtdConfirmada('') }}>Cancelar</button>
+                  </div>
+                ) : (
+                  <button className="primary" onClick={() => { setConfirmandoId(r.id); setQtdConfirmada(String(r.quantidade_atendida_pendente)) }}>
+                    Conferir e confirmar
+                  </button>
+                )}
               </div>
             ))}
           </div>
