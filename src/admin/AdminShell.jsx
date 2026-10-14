@@ -76,37 +76,30 @@ function podeVer(usuario, perm) {
 
 // Estrutura idêntica à extraída do build 54 (grupos, ids, rótulos, ordem). Só o campo `perm` foi
 // adicionado — não existia no menu antigo, ninguém era restringido.
+// ═══════════════════════════════════════════════════════════════════════════════
+// 14/10/2026 — ENXUGAMENTO: só fica visível o que influencia a operação ou grava no banco
+// que a operação lê (levantamento feito com o Claude, página por página, código na mão).
+// Nada foi apagado: todo import, todo componente e todo `{aba === … && <X/>}` continua aqui —
+// só a ENTRADA DE MENU de cada aba abaixo foi movida pro grupo "Standby" (recolhível, fechado
+// por padrão). Reverter qualquer item = mover a linha de volta pro grupo de origem.
+// ═══════════════════════════════════════════════════════════════════════════════
 const MODULOS = [
-  {
-    titulo: 'Painel',
-    abas: [
-      { id: 'painel_resumo', label: 'Resumo' },
-      { id: 'painel_analiseCusto', label: 'Análise de custo', perm: 'custos.ver' },
-      { id: 'painel_estoqueVirtual', label: 'Estoque virtual por item', perm: 'custos.ver' }
-    ]
-  },
   {
     titulo: 'Inventário',
     abas: [
-      { id: 'inv_analise', label: 'Análise / Dashboard', perm: 'contagens.ver' },
-      { id: 'inv_saldo', label: 'Saldo por item', perm: 'contagens.ver' },
       { id: 'inv_historico', label: 'Histórico / Exportar', perm: 'contagens.ver' }
     ]
   },
   {
     titulo: 'Contagem semanal',
     abas: [
-      { id: 'sem_analise', label: 'Análise / Dashboard', perm: 'contagens.ver' },
-      { id: 'sem_saldo', label: 'Saldo por item', perm: 'contagens.ver' },
       { id: 'sem_grupos', label: 'Grupos de contagem', perm: 'cadastros.editar' },
-      { id: 'sem_cmv', label: 'CMV Real × Teórico', perm: 'custos.ver' },
       { id: 'sem_historico', label: 'Histórico / Exportar', perm: 'contagens.ver' }
     ]
   },
   {
     titulo: 'Produção',
     abas: [
-      { id: 'prod_analise', label: 'Análise / Dashboard', perm: 'custos.ver' },
       { id: 'prod_locais', label: 'Saldo calculado por setor', perm: 'custos.ver' },
       { id: 'prod_historico', label: 'Histórico', perm: 'contagens.ver' },
       { id: 'prod_exportar', label: 'Exportar / Importar', perm: 'contagens.ver' }
@@ -117,28 +110,12 @@ const MODULOS = [
     abas: [{ id: 'perdas_historico', label: 'Histórico / Exportar', perm: 'contagens.ver' }]
   },
   {
-    titulo: 'Contabilidade',
-    abas: [{ id: 'cont_exportacao', label: 'Exportação mensal (CMV)', perm: 'custos.ver' }]
-  },
-  {
-    titulo: 'Cardápio',
-    abas: [{ id: 'card_margem', label: 'Margem por prato', perm: 'custos.ver' }]
-  },
-  {
     titulo: 'Base de dados',
     abas: [
       { id: 'base_lojas_setores', label: 'Lojas e Setores', perm: 'cadastros.ver' },
       { id: 'base_produtos', label: 'Produtos', perm: 'cadastros.ver' },
-      { id: 'base_lancamentos', label: 'Lançamentos', perm: 'contagens.ver' },
-      { id: 'base_arvore', label: 'Árvore de transformação', perm: 'cadastros.ver' },
       { id: 'base_arvore_porcionamento', label: 'Porcionamento', perm: 'cadastros.ver' },
-      { id: 'base_funcionarios', label: 'Funcionários', perm: 'cadastros.ver' },
-      { id: 'base_equipamentos', label: 'Equipamentos', perm: 'cadastros.ver' },
-      { id: 'base_hist_produto', label: 'Histórico do produto', perm: 'cadastros.ver' },
-      { id: 'base_diagnostico', label: 'Diagnóstico de prato', perm: 'cadastros.ver' },
-      { id: 'base_historico_ft', label: 'Histórico Ficha Técnica', perm: 'cadastros.ver' },
       { id: 'base_importar', label: 'Importar dados', perm: 'importar.executar' },
-      { id: 'base_cobertura', label: 'Cobertura de dados', perm: 'cadastros.ver' },
       { id: 'base_backup', label: 'Backup', perm: 'dev' },
       { id: 'base_limpeza_teste', label: 'Limpeza de teste', perm: 'dev' }
     ]
@@ -147,11 +124,9 @@ const MODULOS = [
     titulo: 'Configuração',
     abas: [
       { id: 'cfg_mes', label: 'Mês ativo', perm: 'cadastros.editar' },
-      { id: 'cfg_siglas', label: 'Siglas', perm: 'cadastros.editar' },
       // Rótulo igual ao original ("Usuários"); aponta pra `UsuariosPerfis` (§67), não mais pra
       // `Usuarios.jsx` antiga.
       { id: 'cfg_usuarios', label: 'Usuários', perm: 'usuarios.ver' },
-      { id: 'cfg_migrar', label: 'Importar/migrar histórico', perm: 'importar.executar' },
       { id: 'cfg_sistema', label: 'Configurações do sistema', perm: 'cadastros.editar' },
       { id: 'cfg_reset', label: 'Reset', perm: 'dev', perigo: true }
     ]
@@ -160,7 +135,30 @@ const MODULOS = [
     titulo: 'Standby',
     recolhivel: true,
     abas: [
-      { id: 'sb_consolidado', label: 'Consolidado da contagem (antigo)' }
+      { id: 'sb_consolidado', label: 'Consolidado da contagem (antigo)' },
+      // Movidos daqui em 14/10/2026 — não influenciam operação nem banco que a operação lê
+      // (levantamento completo na conversa). Componentes continuam importados e montados lá embaixo.
+      { id: 'painel_resumo', label: 'Resumo' },
+      { id: 'painel_analiseCusto', label: 'Análise de custo', perm: 'custos.ver' },
+      { id: 'painel_estoqueVirtual', label: 'Estoque virtual por item', perm: 'custos.ver' },
+      { id: 'inv_analise', label: 'Inventário: Análise / Dashboard', perm: 'contagens.ver' },
+      { id: 'inv_saldo', label: 'Inventário: Saldo por item', perm: 'contagens.ver' },
+      { id: 'sem_analise', label: 'Contagem semanal: Análise / Dashboard', perm: 'contagens.ver' },
+      { id: 'sem_saldo', label: 'Contagem semanal: Saldo por item', perm: 'contagens.ver' },
+      { id: 'sem_cmv', label: 'Contagem semanal: CMV Real × Teórico', perm: 'custos.ver' },
+      { id: 'prod_analise', label: 'Produção: Análise / Dashboard', perm: 'custos.ver' },
+      { id: 'cont_exportacao', label: 'Exportação mensal (CMV)', perm: 'custos.ver' },
+      { id: 'card_margem', label: 'Cardápio: Margem por prato', perm: 'custos.ver' },
+      { id: 'base_lancamentos', label: 'Lançamentos', perm: 'contagens.ver' },
+      { id: 'base_arvore', label: 'Árvore de transformação', perm: 'cadastros.ver' },
+      { id: 'base_funcionarios', label: 'Funcionários', perm: 'cadastros.ver' },
+      { id: 'base_equipamentos', label: 'Equipamentos', perm: 'cadastros.ver' },
+      { id: 'base_hist_produto', label: 'Histórico do produto', perm: 'cadastros.ver' },
+      { id: 'base_diagnostico', label: 'Diagnóstico de prato', perm: 'cadastros.ver' },
+      { id: 'base_historico_ft', label: 'Histórico Ficha Técnica', perm: 'cadastros.ver' },
+      { id: 'base_cobertura', label: 'Cobertura de dados', perm: 'cadastros.ver' },
+      { id: 'cfg_siglas', label: 'Siglas', perm: 'cadastros.editar' },
+      { id: 'cfg_migrar', label: 'Importar/migrar histórico', perm: 'importar.executar' }
     ]
   }
 ]
