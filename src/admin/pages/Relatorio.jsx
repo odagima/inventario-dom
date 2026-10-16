@@ -81,14 +81,39 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
     return { mes: d.getMonth() + 1, ano: d.getFullYear() }
   }
 
+  // Filtro de Mês/Ano/Loja/Pessoa — só faz sentido no Inventário (tipoFiltro='mensal'), onde a
+  // lista cresce muito com várias lojas e pessoas contando todo mês. 0/'' = sem filtro nesse campo.
+  const [filtroMes, setFiltroMes] = useState(0)
+  const [filtroAno, setFiltroAno] = useState(0)
+  const [filtroLojaId, setFiltroLojaId] = useState('')
+  const [filtroPessoa, setFiltroPessoa] = useState('')
+
+  const anosDisponiveis = useMemo(() => {
+    if (tipoFiltro !== 'mensal') return []
+    const anos = new Set(sessoes.map((s) => mesAnoDaSessao(s).ano))
+    return Array.from(anos).sort((a, b) => b - a)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessoes, tipoFiltro])
+
   // Agrupa "Sessões de contagem" por mês/ano de referência, depois por loja e depois por quem
   // contou — só pra Inventário (tipoFiltro = 'mensal'). Contagem Semanal usa outro agrupamento
   // (ver abaixo), já que ela não separa mais por loja (Compras não separa por loja no Everest) —
   // quem escopa é o Grupo de contagem.
   const sessoesAgrupadas = useMemo(() => {
     if (tipoFiltro !== 'mensal') return null
+    const termoPessoa = filtroPessoa.trim().toLowerCase()
+    const sessoesFiltradas = sessoes.filter((s) => {
+      if (filtroMes || filtroAno) {
+        const { mes, ano } = mesAnoDaSessao(s)
+        if (filtroMes && mes !== filtroMes) return false
+        if (filtroAno && ano !== filtroAno) return false
+      }
+      if (filtroLojaId && s.unidade_id !== filtroLojaId) return false
+      if (termoPessoa && !(s.usuario || '').toLowerCase().includes(termoPessoa)) return false
+      return true
+    })
     const porMes = new Map()
-    for (const s of sessoes) {
+    for (const s of sessoesFiltradas) {
       const { mes, ano } = mesAnoDaSessao(s)
       const chave = `${ano}-${String(mes).padStart(2, '0')}`
       if (!porMes.has(chave)) porMes.set(chave, { ano, mes, porLoja: new Map() })
@@ -108,7 +133,8 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
           .sort((a, b) => a[0].localeCompare(b[0]))
           .map(([loja, porUsuario]) => [loja, Array.from(porUsuario.entries()).sort((a, b) => a[0].localeCompare(b[0], 'pt-BR'))])
       }))
-  }, [sessoes, tipoFiltro])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessoes, tipoFiltro, filtroMes, filtroAno, filtroLojaId, filtroPessoa])
 
   // Mesma correção: a referência informada manda. Sessão mensal cai no dia 1º do mês de
   // referência (representa o mês, não o dia da digitação).
@@ -903,10 +929,37 @@ export default function Relatorio({ tipoFiltro = null, mostrarExportEverest = tr
 
       <div className="card">
         <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: 15 }}>Sessões de contagem</p>
+
+        {tipoFiltro === 'mensal' && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <select value={filtroMes} onChange={(e) => setFiltroMes(Number(e.target.value))} style={{ flex: 1, minWidth: 110 }}>
+              <option value={0}>Mês: todos</option>
+              {NOMES_MES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+            <select value={filtroAno} onChange={(e) => setFiltroAno(Number(e.target.value))} style={{ flex: 1, minWidth: 90 }}>
+              <option value={0}>Ano: todos</option>
+              {anosDisponiveis.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <select value={filtroLojaId} onChange={(e) => setFiltroLojaId(e.target.value)} style={{ flex: 1, minWidth: 140 }}>
+              <option value="">Loja: todas</option>
+              {unidades.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+            </select>
+            <input
+              type="text"
+              value={filtroPessoa}
+              onChange={(e) => setFiltroPessoa(e.target.value)}
+              placeholder="Filtrar por pessoa…"
+              style={{ flex: 1, minWidth: 140 }}
+            />
+          </div>
+        )}
+
         {carregando ? (
           <p className="muted">Carregando…</p>
         ) : sessoes.length === 0 ? (
           <p className="muted">Nenhuma sessão registrada ainda.</p>
+        ) : sessoesAgrupadas?.length === 0 ? (
+          <p className="muted">Nenhuma sessão encontrada com esses filtros.</p>
         ) : sessoesAgrupadas ? (
           sessoesAgrupadas.map((grupo) => (
             <div key={`${grupo.ano}-${grupo.mes}`} style={{ marginBottom: 22 }}>
